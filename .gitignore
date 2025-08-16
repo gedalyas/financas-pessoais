@@ -1,0 +1,28 @@
+# Node / build (raiz, client e server)
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.build/
+.temp/
+.cache/
+
+# Env / editor
+.env
+**/.env
+.vscode/
+.DS_Store
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# SQLite (não versionar a base local)
+server/db.sqlite
+server/*.db
+*.sqlite
+
+# Vite
+vite.svg

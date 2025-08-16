@@ -1,0 +1,542 @@
+// server.js — API de Finanças Pessoais (categorias + transações + recorrentes)
+const express = require('express');
+const cors = require('cors');
+const morgan = require('morgan');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.use(morgan('dev'));
+
+const DB_FILE = path.join(__dirname, 'db.sqlite');
+const db = new sqlite3.Database(DB_FILE);
+
+// ----------------------
+// Paleta + nomes PT (categorias)
+// ----------------------
+const PALETTE = [
+  '#22c55e', '#ef4444', '#3b82f6', '#a855f7', '#f59e0b', '#10b981',
+  '#f43f5e', '#8b5cf6', '#14b8a6', '#eab308', '#06b6d4', '#84cc16'
+];
+
+const COLOR_NAMES_PT = {
+  'azul': '#3b82f6',
+  'vermelho': '#ef4444',
+  'verde': '#22c55e',
+  'amarelo': '#eab308',
+  'roxo': '#a855f7',
+  'laranja': '#f59e0b',
+  'ciano': '#06b6d4',
+  'turquesa': '#14b8a6',
+  'verde-agua': '#14b8a6',
+  'verdeagua': '#14b8a6',
+  'rosa': '#f43f5e',
+  'lima': '#84cc16',
+  'preto': '#111827',
+  'cinza': '#64748b',
+  'branco': '#e5e7eb'
+};
+
+function normalizeStr(s) {
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().trim().replace(/\s+/g, '');
+}
+function isHexColor(v) { return /^#[0-9A-Fa-f]{6}$/.test(String(v || '')); }
+function hash32(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h*31 + s.charCodeAt(i)) >>> 0; return h >>> 0; }
+function pickColor(name) { return PALETTE[hash32(String(name || '')) % PALETTE.length]; }
+
+function parseColor(colorInput, categoryName) {
+  const hasInput = colorInput !== undefined && String(colorInput).trim() !== '';
+  if (!hasInput) return { ok: true, color: pickColor(categoryName) };
+  const raw = String(colorInput).trim();
+  if (isHexColor(raw)) return { ok: true, color: raw };
+  const key = normalizeStr(raw);
+  const named = COLOR_NAMES_PT[key];
+  if (named) return { ok: true, color: named };
+  const list = Object.keys(COLOR_NAMES_PT).sort().join(', ');
+  return { ok: false, error: `Cor indisponível. Use um #hex ou um dos nomes: ${list}.` };
+}
+
+// ----------------------
+// Datas locais (corrige UTC)
+// ----------------------
+function todayLocalISO() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); // normaliza para timezone local do SO
+  return d.toISOString().slice(0, 10);
+}
+function addDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+function addMonthsClamp(iso, n) {
+  const d = new Date(iso + 'T00:00:00');
+  const day = d.getDate();
+  d.setMonth(d.getMonth()+n, 1);
+  const last = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+  d.setDate(Math.min(day, last));
+  return d.toISOString().slice(0,10);
+}
+function advance(iso, freq, interval) {
+  if (freq === 'daily') return addDays(iso, interval);
+  if (freq === 'weekly') return addDays(iso, 7*interval);
+  return addMonthsClamp(iso, interval); // monthly
+}
+function computeInitialNextRun(start_date, freq, interval, end_date) {
+  const today = todayLocalISO();
+  let next = start_date;
+  let safety = 0;
+  while (next < today && safety++ < 1000) {
+    next = advance(next, freq, interval);
+  }
+  if (end_date && next > end_date) next = end_date;
+  return next;
+}
+
+// ----------------------
+// Schema
+// ----------------------
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    description TEXT NOT NULL,
+    category TEXT NOT NULL,
+    type TEXT CHECK (type IN ('income','expense')) NOT NULL,
+    amount REAL NOT NULL
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    color TEXT NOT NULL DEFAULT '#22c55e'
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_categories_name ON categories(name)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS recurrences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    description TEXT NOT NULL,
+    category TEXT NOT NULL,
+    type TEXT CHECK (type IN ('income','expense')) NOT NULL,
+    amount REAL NOT NULL,
+    frequency TEXT CHECK (frequency IN ('daily','weekly','monthly')) NOT NULL,
+    interval INTEGER NOT NULL DEFAULT 1,
+    start_date TEXT NOT NULL,
+    end_date TEXT,
+    next_run TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_recur_next ON recurrences(next_run, active)`);
+});
+
+// ----------------------
+// Helpers (DB)
+// ----------------------
+function run(sql, params = []) { return new Promise((resolve, reject) => db.run(sql, params, function (err) { if (err) reject(err); else resolve(this); })); }
+function all(sql, params = []) { return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => { if (err) reject(err); else resolve(rows); })); }
+function get(sql, params = []) { return new Promise((resolve, reject) => db.get(sql, params, (err, row) => { if (err) reject(err); else resolve(row); })); }
+async function existsCategory(name) { const row = await get(`SELECT 1 FROM categories WHERE name = ?`, [String(name || '').trim()]); return !!row; }
+
+// ping
+app.get('/', (_req, res) => res.send('API OK'));
+
+// ----------------------
+// Categorias (CRUD)
+// ----------------------
+app.get('/api/categories', async (_req, res) => {
+  try {
+    const rows = await all(`SELECT id, name, color FROM categories ORDER BY name ASC`);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/categories', async (req, res) => {
+  try {
+    const { name, color } = req.body || {};
+    const clean = String(name || '').trim();
+    if (!clean) return res.status(400).json({ error: 'Nome é obrigatório.' });
+    const parsed = parseColor(color, clean);
+    if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+
+    await run(`INSERT INTO categories (name, color) VALUES (?, ?)`, [clean, parsed.color]);
+    const row = await get(`SELECT id, name, color FROM categories WHERE name = ?`, [clean]);
+    res.status(201).json(row);
+  } catch (e) {
+    if (String(e.message || '').includes('UNIQUE')) return res.status(409).json({ error: 'Já existe uma categoria com esse nome.' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.patch('/api/categories/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
+    const current = await get(`SELECT id, name, color FROM categories WHERE id = ?`, [id]);
+    if (!current) return res.status(404).json({ error: 'Categoria não encontrada.' });
+
+    const nextName = req.body?.name !== undefined ? String(req.body.name).trim() : undefined;
+    let nextColor = undefined;
+    if (req.body?.color !== undefined) {
+      const parsed = parseColor(req.body.color, nextName ?? current.name);
+      if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+      nextColor = parsed.color;
+    }
+
+    const sets = [], params = [];
+    if (nextName !== undefined) { sets.push('name = ?'); params.push(nextName); }
+    if (nextColor !== undefined) { sets.push('color = ?'); params.push(nextColor); }
+    if (!sets.length) return res.status(400).json({ error: 'Nada para atualizar.' });
+
+    params.push(id);
+    await run(`UPDATE categories SET ${sets.join(', ')} WHERE id = ?`, params);
+
+    if (nextName !== undefined && nextName !== current.name) {
+      await run(`UPDATE transactions SET category = ? WHERE category = ?`, [nextName, current.name]);
+      await run(`UPDATE recurrences SET category = ? WHERE category = ?`, [nextName, current.name]);
+    }
+
+    const row = await get(`SELECT id, name, color FROM categories WHERE id = ?`, [id]);
+    res.json(row);
+  } catch (e) {
+    if (String(e.message || '').includes('UNIQUE')) return res.status(409).json({ error: 'Já existe uma categoria com esse nome.' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/categories/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
+
+    const cat = await get(`SELECT id, name FROM categories WHERE id = ?`, [id]);
+    if (!cat) return res.status(404).json({ error: 'Categoria não encontrada.' });
+
+    const refTx = await get(`SELECT COUNT(1) AS n FROM transactions WHERE category = ?`, [cat.name]);
+    if ((refTx?.n || 0) > 0) {
+      return res.status(409).json({ error: 'Existem transações vinculadas a esta categoria. Atualize/remova-as antes de excluir.' });
+    }
+
+    const refRec = await get(`SELECT COUNT(1) AS n FROM recurrences WHERE category = ?`, [cat.name]);
+    if ((refRec?.n || 0) > 0) {
+      return res.status(409).json({ error: 'Existem recorrências usando esta categoria. Atualize/exclua as recorrências antes de excluir a categoria.' });
+    }
+
+    await run(`DELETE FROM categories WHERE id = ?`, [id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ----------------------
+// Transações
+// ----------------------
+app.get('/api/transactions', async (req, res) => {
+  try {
+    const { from, to, category, type } = req.query;
+    const where = [], params = [];
+    if (from) { where.push('t.date >= ?'); params.push(from); }
+    if (to)   { where.push('t.date <= ?'); params.push(to); }
+    if (category) { where.push('t.category = ?'); params.push(category); }
+    if (type)     { where.push('t.type = ?'); params.push(type); }
+
+    const sql = `
+      SELECT t.*, COALESCE(c.color, '#64748b') AS category_color
+      FROM transactions t
+      LEFT JOIN categories c ON c.name = t.category
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+      ORDER BY t.date DESC, t.id DESC
+    `;
+    const rows = await all(sql, params);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/transactions', async (req, res) => {
+  try {
+    const { date, description, category, type, amount } = req.body || {};
+    const amt = typeof amount === 'number' ? amount : parseFloat(String(amount).replace(',', '.'));
+    if (!date || !description || !category || !type || !Number.isFinite(amt)) {
+      return res.status(400).json({ error: 'Campos: date, description, category, type, amount(number).' });
+    }
+    if (!['income', 'expense'].includes(type)) {
+      return res.status(400).json({ error: "type deve ser 'income' ou 'expense'." });
+    }
+    const ok = await existsCategory(category);
+    if (!ok) return res.status(400).json({ error: 'Categoria inexistente. Escolha uma categoria válida.' });
+
+    const stmt = await run(
+      `INSERT INTO transactions (date, description, category, type, amount) VALUES (?, ?, ?, ?, ?)`,
+      [date, String(description).trim(), String(category).trim(), type, amt]
+    );
+    const row = await get(`SELECT * FROM transactions WHERE id = ?`, [stmt.lastID]);
+    res.status(201).json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/transactions/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (Number.isNaN(id)) return res.status(400).json({ error: 'id inválido' });
+    await run(`DELETE FROM transactions WHERE id = ?`, [id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ----------------------
+// Resumo
+// ----------------------
+app.get('/api/summary', async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const where = [], params = [];
+    if (from) { where.push('t.date >= ?'); params.push(from); }
+    if (to)   { where.push('t.date <= ?'); params.push(to); }
+
+    const totals = await get(
+      `SELECT 
+        SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as income,
+        SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) as expense
+       FROM transactions t
+       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`,
+      params
+    );
+
+    const byCategory = await all(
+      `SELECT t.category AS category,
+              SUM(CASE WHEN t.type='income' THEN t.amount ELSE 0 END) as income,
+              SUM(CASE WHEN t.type='expense' THEN t.amount ELSE 0 END) as expense,
+              COALESCE(c.color, '#64748b') as color
+       FROM transactions t
+       LEFT JOIN categories c ON c.name = t.category
+       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+       GROUP BY t.category
+       ORDER BY (income - expense) DESC`,
+      params
+    );
+
+    res.json({
+      income: totals?.income ?? 0,
+      expense: totals?.expense ?? 0,
+      balance: (totals?.income ?? 0) - (totals?.expense ?? 0),
+      byCategory
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ----------------------
+// Recorrências (CRUD + processor)
+// ----------------------
+const VALID_FREQ = new Set(['daily','weekly','monthly']);
+
+app.get('/api/recurrences', async (_req, res) => {
+  try {
+    const rows = await all(`SELECT * FROM recurrences ORDER BY active DESC, next_run ASC, id ASC`);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/recurrences', async (req, res) => {
+  try {
+    let { description, category, type, amount, frequency, interval, start_date, end_date, active } = req.body || {};
+    const amt = typeof amount === 'number' ? amount : parseFloat(String(amount).replace(',', '.'));
+    description = String(description || '').trim();
+    category = String(category || '').trim();
+    type = String(type || '').trim();
+    frequency = String(frequency || '').trim();
+    interval = Number(interval || 1);
+    start_date = String(start_date || '').trim();
+    end_date = end_date ? String(end_date).trim() : null;
+    active = active === undefined ? 1 : (Number(Boolean(active)) ? 1 : 0);
+
+    if (!description || !category || !type || !Number.isFinite(amt) || !start_date || !VALID_FREQ.has(frequency)) {
+      return res.status(400).json({ error: 'Campos obrigatórios: description, category, type, amount, frequency (daily|weekly|monthly), start_date.' });
+    }
+    if (!['income','expense'].includes(type)) return res.status(400).json({ error: "type deve ser 'income' ou 'expense'." });
+    if (!(interval >= 1 && Number.isInteger(interval))) return res.status(400).json({ error: 'interval deve ser inteiro >= 1.' });
+    if (!(await existsCategory(category))) return res.status(400).json({ error: 'Categoria inexistente.' });
+
+    const next_run = computeInitialNextRun(start_date, frequency, interval, end_date);
+    const stmt = await run(
+      `INSERT INTO recurrences (description, category, type, amount, frequency, interval, start_date, end_date, next_run, active)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [description, category, type, amt, frequency, interval, start_date, end_date, next_run, active]
+    );
+    const row = await get(`SELECT * FROM recurrences WHERE id = ?`, [stmt.lastID]);
+    res.status(201).json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/recurrences/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
+
+    const current = await get(`SELECT * FROM recurrences WHERE id = ?`, [id]);
+    if (!current) return res.status(404).json({ error: 'Recorrência não encontrada.' });
+
+    const fields = {};
+    const set = [], params = [];
+
+    if (req.body.description !== undefined) {
+      fields.description = String(req.body.description).trim();
+      if (!fields.description) return res.status(400).json({ error: 'Descrição obrigatória.' });
+    }
+    if (req.body.category !== undefined) {
+      fields.category = String(req.body.category).trim();
+      if (!(await existsCategory(fields.category))) return res.status(400).json({ error: 'Categoria inexistente.' });
+    }
+    if (req.body.type !== undefined) {
+      fields.type = String(req.body.type).trim();
+      if (!['income','expense'].includes(fields.type)) return res.status(400).json({ error: "type deve ser 'income' ou 'expense'." });
+    }
+    if (req.body.amount !== undefined) {
+      const amt = typeof req.body.amount === 'number' ? req.body.amount : parseFloat(String(req.body.amount).replace(',', '.'));
+      if (!Number.isFinite(amt)) return res.status(400).json({ error: 'amount inválido.' });
+      fields.amount = amt;
+    }
+    if (req.body.frequency !== undefined) {
+      fields.frequency = String(req.body.frequency).trim();
+      if (!VALID_FREQ.has(fields.frequency)) return res.status(400).json({ error: 'frequency inválida.' });
+    }
+    if (req.body.interval !== undefined) {
+      fields.interval = Number(req.body.interval);
+      if (!(fields.interval >= 1 && Number.isInteger(fields.interval))) return res.status(400).json({ error: 'interval deve ser inteiro >= 1.' });
+    }
+    if (req.body.start_date !== undefined) {
+      fields.start_date = String(req.body.start_date).trim();
+      if (!fields.start_date) return res.status(400).json({ error: 'start_date obrigatório.' });
+    }
+    if (req.body.end_date !== undefined) {
+      fields.end_date = req.body.end_date ? String(req.body.end_date).trim() : null;
+    }
+    if (req.body.active !== undefined) {
+      fields.active = Number(Boolean(req.body.active));
+    }
+
+    for (const [k,v] of Object.entries(fields)) { set.push(`${k} = ?`); params.push(v); }
+
+    const nextDependencies = ['frequency','interval','start_date'];
+    if (nextDependencies.some(k => fields[k] !== undefined)) {
+      const freq = fields.frequency ?? current.frequency;
+      const intv = fields.interval ?? current.interval;
+      const start = fields.start_date ?? current.start_date;
+      const next = computeInitialNextRun(start, freq, intv, fields.end_date ?? current.end_date);
+      set.push('next_run = ?'); params.push(next);
+    }
+
+    if (!set.length) return res.status(400).json({ error: 'Nada para atualizar.' });
+    params.push(id);
+    await run(`UPDATE recurrences SET ${set.join(', ')} WHERE id = ?`, params);
+    const row = await get(`SELECT * FROM recurrences WHERE id = ?`, [id]);
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/recurrences/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
+    await run(`DELETE FROM recurrences WHERE id = ?`, [id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// roda processador manualmente (todas)
+app.post('/api/recurrences/run', async (_req, res) => {
+  try {
+    const count = await processRecurrences();
+    res.json({ ok: true, generated: count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// roda processador para uma recorrência (suporta force=1 para "Lançar hoje" + dedupe)
+app.post('/api/recurrences/:id/run', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const force = String(req.query.force || '').toLowerCase();
+    const doForce = force === '1' || force === 'true';
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
+
+    if (!doForce) {
+      const count = await processRecurrences(id);
+      return res.json({ ok: true, generated: count });
+    }
+
+    const r = await get(`SELECT * FROM recurrences WHERE id = ?`, [id]);
+    if (!r) return res.status(404).json({ error: 'Recorrência não encontrada.' });
+    if (r.active !== 1) return res.status(409).json({ error: 'Recorrência pausada.' });
+
+    const today = todayLocalISO();
+
+    if (r.next_run <= today) {
+      const count = await processRecurrences(id);
+      return res.json({ ok: true, generated: count });
+    }
+
+    const exists = await get(
+      `SELECT 1 FROM transactions 
+       WHERE date=? AND description=? AND category=? AND type=? AND amount=? LIMIT 1`,
+      [today, r.description, r.category, r.type, r.amount]
+    );
+    if (exists) {
+      const next = advance(today, r.frequency, r.interval);
+      await run(`UPDATE recurrences SET next_run = ? WHERE id = ?`, [next, r.id]);
+      return res.json({ ok: true, generated: 0, deduped: true });
+    }
+
+    await run(
+      `INSERT INTO transactions (date, description, category, type, amount)
+       VALUES (?, ?, ?, ?, ?)`,
+      [today, r.description, r.category, r.type, r.amount]
+    );
+    const next = advance(today, r.frequency, r.interval);
+    await run(`UPDATE recurrences SET next_run = ? WHERE id = ?`, [next, r.id]);
+
+    return res.json({ ok: true, generated: 1 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ----------------------
+// Processador de recorrências
+// ----------------------
+async function processRecurrences(onlyId = null) {
+  const today = todayLocalISO();
+  const rows = await all(
+    `SELECT * FROM recurrences
+     WHERE active = 1
+       AND next_run <= ?
+       ${onlyId ? 'AND id = ?' : ''}
+     ORDER BY next_run ASC, id ASC`,
+    onlyId ? [today, onlyId] : [today]
+  );
+
+  let generated = 0;
+  for (const r of rows) {
+    let next = r.next_run;
+    let safety = 0;
+    const limit = r.end_date || '9999-12-31';
+    while (next <= today && next <= limit && safety++ < 100) {
+      await run(
+        `INSERT INTO transactions (date, description, category, type, amount)
+         VALUES (?, ?, ?, ?, ?)`,
+        [next, r.description, r.category, r.type, r.amount]
+      );
+      generated++;
+      next = advance(next, r.frequency, r.interval);
+    }
+    if (next !== r.next_run) {
+      await run(`UPDATE recurrences SET next_run = ? WHERE id = ?`, [next, r.id]);
+    }
+  }
+  return generated;
+}
+
+// agenda a cada 60s
+setInterval(() => { processRecurrences().catch(() => {}); }, 60 * 1000);
+
+// roda na inicialização
+processRecurrences().catch(() => {});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`API em http://localhost:${PORT}`));
