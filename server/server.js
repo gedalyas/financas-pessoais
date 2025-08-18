@@ -65,7 +65,7 @@ function parseColor(colorInput, categoryName) {
 // ----------------------
 function todayLocalISO() {
   const d = new Date();
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); // normaliza para timezone local do SO
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 10);
 }
 function addDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
@@ -128,7 +128,7 @@ db.serialize(() => {
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_recur_next ON recurrences(next_run, active)`);
 
-  // --------- NOVO: Metas ---------
+  // --------- Metas ---------
   db.run(`CREATE TABLE IF NOT EXISTS goals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -146,7 +146,7 @@ db.serialize(() => {
     goal_id INTEGER NOT NULL,
     date TEXT NOT NULL,
     amount REAL NOT NULL,   -- +depósito / -retirada
-    transaction_id INTEGER, -- link opcional em transactions.id
+    transaction_id INTEGER, -- id em transactions (opcional)
     source TEXT CHECK (source IN ('manual','transaction','recurrence')) DEFAULT 'manual',
     notes TEXT,
     FOREIGN KEY (goal_id) REFERENCES goals(id)
@@ -213,13 +213,13 @@ app.patch('/api/categories/:id', async (req, res) => {
       nextColor = parsed.color;
     }
 
-    const sets = [], params = [];
-    if (nextName !== undefined) { sets.push('name = ?'); params.push(nextName); }
-    if (nextColor !== undefined) { sets.push('color = ?'); params.push(nextColor); }
-    if (!sets.length) return res.status(400).json({ error: 'Nada para atualizar.' });
+    const set = [], params = [];
+    if (nextName !== undefined) { set.push('name = ?'); params.push(nextName); }
+    if (nextColor !== undefined) { set.push('color = ?'); params.push(nextColor); }
+    if (!set.length) return res.status(400).json({ error: 'Nada para atualizar.' });
 
     params.push(id);
-    await run(`UPDATE categories SET ${sets.join(', ')} WHERE id = ?`, params);
+    await run(`UPDATE categories SET ${set.join(', ')} WHERE id = ?`, params);
 
     if (nextName !== undefined && nextName !== current.name) {
       await run(`UPDATE transactions SET category = ? WHERE category = ?`, [nextName, current.name]);
@@ -456,7 +456,7 @@ app.patch('/api/recurrences/:id', async (req, res) => {
 
     if (!set.length) return res.status(400).json({ error: 'Nada para atualizar.' });
     params.push(id);
-    await run(`UPDATE recurrences SET ${sets.join(', ')} WHERE id = ?`, params);
+    await run(`UPDATE recurrences SET ${set.join(', ')} WHERE id = ?`, params);
     const row = await get(`SELECT * FROM recurrences WHERE id = ?`, [id]);
     res.json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -570,13 +570,12 @@ setInterval(() => { processRecurrences().catch(() => {}); }, 60 * 1000);
 processRecurrences().catch(() => {});
 
 // ----------------------
-// --------- NOVO: Metas (Goals)
+// Metas (Goals)
 // ----------------------
 function monthsBetween(startISO, endISO) {
   const a = new Date(startISO + 'T00:00:00');
   const b = new Date(endISO + 'T00:00:00');
   let m = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
-  // se o dia de b for menor que o dia de a, considere mês corrente incompleto
   if (b.getDate() < a.getDate()) m -= 1;
   return m;
 }
@@ -607,13 +606,7 @@ app.get('/api/goals', async (_req, res) => {
         const m = Math.max(1, monthsBetween(today, g.target_date));
         suggested_monthly = missing > 0 ? missing / m : 0;
       }
-      return {
-        ...g,
-        saved,
-        missing,
-        percent,
-        suggested_monthly
-      };
+      return { ...g, saved, missing, percent, suggested_monthly };
     });
 
     res.json(enriched);
@@ -657,38 +650,38 @@ app.patch('/api/goals/:id', async (req, res) => {
     const current = await get(`SELECT * FROM goals WHERE id = ?`, [id]);
     if (!current) return res.status(404).json({ error: 'Meta não encontrada.' });
 
-    const sets = [], params = [];
+    const set = [], params = [];
     if (req.body.name !== undefined) {
       const v = String(req.body.name).trim();
       if (!v) return res.status(400).json({ error: 'Nome é obrigatório.' });
-      sets.push('name = ?'); params.push(v);
+      set.push('name = ?'); params.push(v);
     }
     if (req.body.target_amount !== undefined) {
       const amt = typeof req.body.target_amount === 'number' ? req.body.target_amount : parseFloat(String(req.body.target_amount).replace(',', '.'));
       if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'target_amount inválido.' });
-      sets.push('target_amount = ?'); params.push(amt);
+      set.push('target_amount = ?'); params.push(amt);
     }
     if (req.body.color !== undefined) {
       const parsed = parseColor(req.body.color, req.body.name ?? current.name);
       if (!parsed.ok) return res.status(400).json({ error: parsed.error });
-      sets.push('color = ?'); params.push(parsed.color);
+      set.push('color = ?'); params.push(parsed.color);
     }
     if (req.body.target_date !== undefined) {
       const v = req.body.target_date ? String(req.body.target_date).trim() : null;
-      sets.push('target_date = ?'); params.push(v);
+      set.push('target_date = ?'); params.push(v);
     }
     if (req.body.status !== undefined) {
       const st = String(req.body.status).trim();
       if (!['active','paused','achieved','archived'].includes(st)) return res.status(400).json({ error: 'status inválido.' });
-      sets.push('status = ?'); params.push(st);
+      set.push('status = ?'); params.push(st);
     }
     if (req.body.notes !== undefined) {
-      sets.push('notes = ?'); params.push(req.body.notes ? String(req.body.notes) : null);
+      set.push('notes = ?'); params.push(req.body.notes ? String(req.body.notes) : null);
     }
 
-    if (!sets.length) return res.status(400).json({ error: 'Nada para atualizar.' });
+    if (!set.length) return res.status(400).json({ error: 'Nada para atualizar.' });
     params.push(id);
-    await run(`UPDATE goals SET ${sets.join(', ')} WHERE id = ?`, params);
+    await run(`UPDATE goals SET ${set.join(', ')} WHERE id = ?`, params);
     const row = await get(`SELECT * FROM goals WHERE id = ?`, [id]);
     res.json(row);
   } catch (e) {
@@ -696,15 +689,34 @@ app.patch('/api/goals/:id', async (req, res) => {
   }
 });
 
-// Excluir meta (se não houver contribuições)
+// Excluir meta (SEMPRE em cascata: contribuições + transações ligadas)
 app.delete('/api/goals/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
-    const cnt = await get(`SELECT COUNT(1) AS n FROM goal_contributions WHERE goal_id = ?`, [id]);
-    if ((cnt?.n || 0) > 0) return res.status(409).json({ error: 'Meta possui contribuições. Arquive em vez de excluir.' });
-    await run(`DELETE FROM goals WHERE id = ?`, [id]);
-    res.json({ ok: true });
+
+    await run('BEGIN');
+    try {
+      await run(`
+        DELETE FROM transactions 
+        WHERE id IN (
+          SELECT transaction_id FROM goal_contributions 
+          WHERE goal_id = ? AND transaction_id IS NOT NULL
+        )
+      `, [id]);
+
+      await run(`DELETE FROM goal_contributions WHERE goal_id = ?`, [id]);
+      const result = await run(`DELETE FROM goals WHERE id = ?`, [id]);
+
+      await run('COMMIT');
+      if ((result?.changes ?? 0) === 0) {
+        return res.status(404).json({ error: 'Meta não encontrada.' });
+      }
+      res.json({ ok: true, cascade: true });
+    } catch (e) {
+      await run('ROLLBACK');
+      throw e;
+    }
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -735,9 +747,8 @@ app.post('/api/goals/:id/contributions', async (req, res) => {
 
     let txId = null;
     if (createTransaction) {
-      // garante categoria "Metas"
       await ensureCategory('Metas');
-      const type = amt > 0 ? 'expense' : 'income';  // depósito = saída (guardar); retirada = entrada
+      const type = amt > 0 ? 'expense' : 'income';  // depósito = saída; retirada = entrada
       const ins = await run(
         `INSERT INTO transactions (date, description, category, type, amount)
          VALUES (?, ?, ?, ?, ?)`,

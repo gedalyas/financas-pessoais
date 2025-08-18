@@ -38,6 +38,7 @@ export default function GoalsPage() {
   const [cCreateTx, setCCreateTx] = useState(true);
   const [cNotes, setCNotes] = useState('');
 
+  // excluir meta
   const [toDelete, setToDelete] = useState(null);
 
   async function load() {
@@ -113,19 +114,20 @@ export default function GoalsPage() {
     if (r.ok) load();
   }
 
+  // EXCLUSÃO DEFINITIVA: apaga contribuições e transações ligadas a elas
   async function deleteGoalNow() {
     if (!toDelete) return;
-    const r = await fetch(`${API_URL}/api/goals/${toDelete.id}`, { method: 'DELETE' });
+    const r = await fetch(`${API_URL}/api/goals/${toDelete.id}?force=1`, { method: 'DELETE' });
     setToDelete(null);
     if (!r.ok) {
       const j = await r.json().catch(()=> ({}));
-      alert(j.error || 'Falha ao excluir. Se houver contribuições, arquive a meta.');
+      alert(j.error || 'Falha ao excluir meta.');
     } else {
       load();
     }
   }
 
-  // cálculo em tempo real da sugestão mensal (no modal)
+  // sugestão mensal ao preencher valor + data-alvo
   const monthlySuggestion = (() => {
     const tgt = parseFloat(String(gTarget).replace(',', '.'));
     if (!gTargetDate || !Number.isFinite(tgt) || tgt <= 0) return null;
@@ -284,7 +286,7 @@ export default function GoalsPage() {
       <ConfirmDialog
         open={!!toDelete}
         title="Excluir meta"
-        message={toDelete ? `Excluir "${toDelete.name}"? (Só é possível se não houver contribuições)` : ''}
+        message={toDelete ? `Excluir definitivamente "${toDelete.name}"? Isso irá APAGAR todas as contribuições e as transações vinculadas a essa meta.` : ''}
         confirmLabel="Excluir"
         cancelLabel="Cancelar"
         danger
