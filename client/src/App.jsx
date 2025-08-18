@@ -3,7 +3,8 @@ import { Routes, Route } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import TransactionsPage from './pages/Transactions';
 import StatsPage from './pages/Stats';
-import RecurrencesPage from './pages/Recurrences'; // << novo
+import RecurrencesPage from './pages/Recurrences';
+import GoalsPage from './pages/Goals';
 
 export default function App() {
   return (
@@ -13,7 +14,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<TransactionsPage />} />
           <Route path="/estatisticas" element={<StatsPage />} />
-          <Route path="/recorrentes" element={<RecurrencesPage />} /> {/* novo */}
+          <Route path="/recorrentes" element={<RecurrencesPage />} />
+          <Route path="/metas" element={<GoalsPage />} />
           <Route path="*" element={<TransactionsPage />} />
         </Routes>
       </main>

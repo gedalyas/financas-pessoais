@@ -117,4 +117,68 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 @media (max-width: 1000px) { .grid-2 { grid-template-columns: 1fr; } }
+/* ——— Layout de página / cabeçalho ——— */
+.header-actions { display:flex; gap:8px; align-items:center; }
+
+/* ——— Grid de cards das metas ——— */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.goal-card { display: grid; gap: 8px; }
+.goal-head { display: flex; align-items: center; gap: 8px; }
+.goal-title { flex: 1; }
+.goal-status { margin-left: auto; color: var(--muted, #94a3b8); font-size: 12px; }
+.goal-line { display:flex; justify-content: space-between; align-items:center; }
+
+/* ——— Barra de progresso ——— */
+.progress {
+  background: rgba(148,163,184,0.25);
+  border-radius: 6px;
+  height: 10px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 10px;
+  border-radius: 6px;
+  transition: width .25s ease;
+}
+
+/* ——— Modal: melhor grid e ações ——— */
+.modal-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.full { grid-column: 1 / -1; }
+.modal-actions { display:flex; gap:8px; justify-content:flex-start; align-items:center; }
+.checkbox-line { display:flex; align-items:center; gap:8px; }
+
+/* ——— Swatches de cor ——— */
+.swatches { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; align-items:center; }
+.swatch {
+  width: 22px; height: 22px; border-radius: 6px;
+  border: 2px solid rgba(255,255,255,.25);
+  cursor: pointer;
+}
+.swatch-active {
+  border-color: #fff;
+  outline: 2px solid #16a34a; /* verde */
+  outline-offset: 0;
+}
+
+/* ——— Inputs mais consistentes ——— */
+.input, .select, textarea.input {
+  min-height: 40px;
+  color: #e5e7eb;
+}
+textarea.input { min-height: 90px; }
+.input:focus, .select:focus, textarea.input:focus { outline: 2px solid rgba(59,130,246,.6); }
+
+/* Ícone do datepicker visível no dark */
+input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1) opacity(.9); }
+
+/* ——— Bolinha de cor ——— */
+.category-dot { width: 10px; height: 10px; border-radius: 50%; display:inline-block; margin-right: 6px; }
+
 

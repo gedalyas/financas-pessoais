@@ -1,4 +1,4 @@
-// server.js — API de Finanças Pessoais (categorias + transações + recorrentes)
+// server.js — API de Finanças Pessoais (categorias + transações + recorrentes + metas)
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
@@ -127,6 +127,31 @@ db.serialize(() => {
     active INTEGER NOT NULL DEFAULT 1
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_recur_next ON recurrences(next_run, active)`);
+
+  // --------- NOVO: Metas ---------
+  db.run(`CREATE TABLE IF NOT EXISTS goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    target_amount REAL NOT NULL,
+    color TEXT NOT NULL DEFAULT '#22c55e',
+    start_date TEXT NOT NULL,
+    target_date TEXT,
+    status TEXT CHECK (status IN ('active','paused','achieved','archived')) NOT NULL DEFAULT 'active',
+    notes TEXT
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS goal_contributions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    amount REAL NOT NULL,   -- +depósito / -retirada
+    transaction_id INTEGER, -- link opcional em transactions.id
+    source TEXT CHECK (source IN ('manual','transaction','recurrence')) DEFAULT 'manual',
+    notes TEXT,
+    FOREIGN KEY (goal_id) REFERENCES goals(id)
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_goal_contrib_goal_date ON goal_contributions(goal_id, date)`);
 });
 
 // ----------------------
@@ -136,6 +161,12 @@ function run(sql, params = []) { return new Promise((resolve, reject) => db.run(
 function all(sql, params = []) { return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => { if (err) reject(err); else resolve(rows); })); }
 function get(sql, params = []) { return new Promise((resolve, reject) => db.get(sql, params, (err, row) => { if (err) reject(err); else resolve(row); })); }
 async function existsCategory(name) { const row = await get(`SELECT 1 FROM categories WHERE name = ?`, [String(name || '').trim()]); return !!row; }
+async function ensureCategory(name) {
+  const ok = await existsCategory(name);
+  if (ok) return;
+  const parsed = parseColor(undefined, name); // cor automática
+  await run(`INSERT INTO categories (name, color) VALUES (?, ?)`, [name, parsed.color]);
+}
 
 // ping
 app.get('/', (_req, res) => res.send('API OK'));
@@ -425,7 +456,7 @@ app.patch('/api/recurrences/:id', async (req, res) => {
 
     if (!set.length) return res.status(400).json({ error: 'Nada para atualizar.' });
     params.push(id);
-    await run(`UPDATE recurrences SET ${set.join(', ')} WHERE id = ?`, params);
+    await run(`UPDATE recurrences SET ${sets.join(', ')} WHERE id = ?`, params);
     const row = await get(`SELECT * FROM recurrences WHERE id = ?`, [id]);
     res.json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -537,6 +568,217 @@ setInterval(() => { processRecurrences().catch(() => {}); }, 60 * 1000);
 
 // roda na inicialização
 processRecurrences().catch(() => {});
+
+// ----------------------
+// --------- NOVO: Metas (Goals)
+// ----------------------
+function monthsBetween(startISO, endISO) {
+  const a = new Date(startISO + 'T00:00:00');
+  const b = new Date(endISO + 'T00:00:00');
+  let m = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  // se o dia de b for menor que o dia de a, considere mês corrente incompleto
+  if (b.getDate() < a.getDate()) m -= 1;
+  return m;
+}
+
+// Lista metas com campos calculados
+app.get('/api/goals', async (_req, res) => {
+  try {
+    const rows = await all(`
+      SELECT g.*,
+             COALESCE(SUM(gc.amount), 0) AS saved
+      FROM goals g
+      LEFT JOIN goal_contributions gc ON gc.goal_id = g.id
+      GROUP BY g.id
+      ORDER BY 
+        CASE g.status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'achieved' THEN 2 ELSE 3 END,
+        g.id ASC
+    `);
+
+    const today = todayLocalISO();
+    const enriched = rows.map((g) => {
+      const saved = Number(g.saved || 0);
+      const target = Number(g.target_amount || 0);
+      const missing = Math.max(0, target - saved);
+      const percent = target > 0 ? Math.min(100, Math.max(0, Math.round((saved / target) * 100))) : 0;
+
+      let suggested_monthly = null;
+      if (g.target_date) {
+        const m = Math.max(1, monthsBetween(today, g.target_date));
+        suggested_monthly = missing > 0 ? missing / m : 0;
+      }
+      return {
+        ...g,
+        saved,
+        missing,
+        percent,
+        suggested_monthly
+      };
+    });
+
+    res.json(enriched);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Criar meta
+app.post('/api/goals', async (req, res) => {
+  try {
+    const { name, target_amount, color, target_date, notes } = req.body || {};
+    const clean = String(name || '').trim();
+    const amt = typeof target_amount === 'number' ? target_amount : parseFloat(String(target_amount).replace(',', '.'));
+    if (!clean) return res.status(400).json({ error: 'Nome é obrigatório.' });
+    if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'target_amount inválido.' });
+
+    let parsedColor = parseColor(color, clean);
+    if (!parsedColor.ok) return res.status(400).json({ error: parsedColor.error });
+
+    const start = todayLocalISO();
+    const tdate = target_date ? String(target_date).trim() : null;
+
+    const stmt = await run(
+      `INSERT INTO goals (name, target_amount, color, start_date, target_date, status, notes)
+       VALUES (?, ?, ?, ?, ?, 'active', ?)`,
+      [clean, amt, parsedColor.color, start, tdate, notes || null]
+    );
+    const row = await get(`SELECT * FROM goals WHERE id = ?`, [stmt.lastID]);
+    res.status(201).json(row);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Atualizar meta
+app.patch('/api/goals/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
+    const current = await get(`SELECT * FROM goals WHERE id = ?`, [id]);
+    if (!current) return res.status(404).json({ error: 'Meta não encontrada.' });
+
+    const sets = [], params = [];
+    if (req.body.name !== undefined) {
+      const v = String(req.body.name).trim();
+      if (!v) return res.status(400).json({ error: 'Nome é obrigatório.' });
+      sets.push('name = ?'); params.push(v);
+    }
+    if (req.body.target_amount !== undefined) {
+      const amt = typeof req.body.target_amount === 'number' ? req.body.target_amount : parseFloat(String(req.body.target_amount).replace(',', '.'));
+      if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'target_amount inválido.' });
+      sets.push('target_amount = ?'); params.push(amt);
+    }
+    if (req.body.color !== undefined) {
+      const parsed = parseColor(req.body.color, req.body.name ?? current.name);
+      if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+      sets.push('color = ?'); params.push(parsed.color);
+    }
+    if (req.body.target_date !== undefined) {
+      const v = req.body.target_date ? String(req.body.target_date).trim() : null;
+      sets.push('target_date = ?'); params.push(v);
+    }
+    if (req.body.status !== undefined) {
+      const st = String(req.body.status).trim();
+      if (!['active','paused','achieved','archived'].includes(st)) return res.status(400).json({ error: 'status inválido.' });
+      sets.push('status = ?'); params.push(st);
+    }
+    if (req.body.notes !== undefined) {
+      sets.push('notes = ?'); params.push(req.body.notes ? String(req.body.notes) : null);
+    }
+
+    if (!sets.length) return res.status(400).json({ error: 'Nada para atualizar.' });
+    params.push(id);
+    await run(`UPDATE goals SET ${sets.join(', ')} WHERE id = ?`, params);
+    const row = await get(`SELECT * FROM goals WHERE id = ?`, [id]);
+    res.json(row);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Excluir meta (se não houver contribuições)
+app.delete('/api/goals/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
+    const cnt = await get(`SELECT COUNT(1) AS n FROM goal_contributions WHERE goal_id = ?`, [id]);
+    if ((cnt?.n || 0) > 0) return res.status(409).json({ error: 'Meta possui contribuições. Arquive em vez de excluir.' });
+    await run(`DELETE FROM goals WHERE id = ?`, [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Listar contribuições
+app.get('/api/goals/:id/contributions', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const rows = await all(`SELECT * FROM goal_contributions WHERE goal_id = ? ORDER BY date DESC, id DESC`, [id]);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Criar contribuição (depósito + / retirada -) com opção de gerar transação
+app.post('/api/goals/:id/contributions', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const g = await get(`SELECT * FROM goals WHERE id = ?`, [id]);
+    if (!g) return res.status(404).json({ error: 'Meta não encontrada.' });
+
+    let { date, amount, createTransaction, notes } = req.body || {};
+    date = String(date || '').trim() || todayLocalISO();
+    const amt = typeof amount === 'number' ? amount : parseFloat(String(amount).replace(',', '.'));
+    if (!Number.isFinite(amt) || amt === 0) return res.status(400).json({ error: 'amount inválido.' });
+
+    let txId = null;
+    if (createTransaction) {
+      // garante categoria "Metas"
+      await ensureCategory('Metas');
+      const type = amt > 0 ? 'expense' : 'income';  // depósito = saída (guardar); retirada = entrada
+      const ins = await run(
+        `INSERT INTO transactions (date, description, category, type, amount)
+         VALUES (?, ?, ?, ?, ?)`,
+        [date, `Meta: ${g.name}`, 'Metas', type, Math.abs(amt)]
+      );
+      txId = ins.lastID || null;
+    }
+
+    const st = await run(
+      `INSERT INTO goal_contributions (goal_id, date, amount, transaction_id, source, notes)
+       VALUES (?, ?, ?, ?, 'manual', ?)`,
+      [id, date, amt, txId, notes || null]
+    );
+
+    const row = await get(`SELECT * FROM goal_contributions WHERE id = ?`, [st.lastID]);
+    res.status(201).json(row);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Excluir contribuição (opcionalmente apaga transação vinculada ?deleteTransaction=1)
+app.delete('/api/goals/:id/contributions/:cid', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const cid = Number(req.params.cid);
+    const delTx = String(req.query.deleteTransaction || '').toLowerCase();
+    const alsoTx = delTx === '1' || delTx === 'true';
+
+    const row = await get(`SELECT * FROM goal_contributions WHERE id = ? AND goal_id = ?`, [cid, id]);
+    if (!row) return res.status(404).json({ error: 'Contribuição não encontrada.' });
+
+    if (alsoTx && row.transaction_id) {
+      await run(`DELETE FROM transactions WHERE id = ?`, [row.transaction_id]);
+    }
+    await run(`DELETE FROM goal_contributions WHERE id = ?`, [cid]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`API em http://localhost:${PORT}`));

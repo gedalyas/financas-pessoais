@@ -9,6 +9,7 @@ export default function Sidebar() {
         <NavLink to="/" end className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}>📒 Dashboard</NavLink>
         <NavLink to="/estatisticas" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}>📈 Estatísticas</NavLink>
         <NavLink to="/recorrentes" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}>🔁 Recorrentes</NavLink>
+        <NavLink to="/metas" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}>🎯 Metas</NavLink>
       </nav>
       <div className="sidebar-footer">Para duvidas e sugestões favor contatar o nosso suporte: 3199311-2726</div>
     </aside>
