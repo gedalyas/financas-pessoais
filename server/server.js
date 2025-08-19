@@ -94,8 +94,33 @@ function computeInitialNextRun(start_date, freq, interval, end_date) {
 }
 
 // ----------------------
-// Schema
+// Helpers (DB)
 // ----------------------
+function run(sql, params = []) { return new Promise((resolve, reject) => db.run(sql, params, function (err) { if (err) reject(err); else resolve(this); })); }
+function all(sql, params = []) { return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => { if (err) reject(err); else resolve(rows); })); }
+function get(sql, params = []) { return new Promise((resolve, reject) => db.get(sql, params, (err, row) => { if (err) reject(err); else resolve(row); })); }
+async function existsCategory(name) { const row = await get(`SELECT 1 FROM categories WHERE name = ?`, [String(name || '').trim()]); return !!row; }
+async function ensureCategory(name) {
+  const ok = await existsCategory(name);
+  if (ok) return;
+  const parsed = parseColor(undefined, name); // cor automática
+  await run(`INSERT INTO categories (name, color) VALUES (?, ?)`, [name, parsed.color]);
+}
+async function goalExists(id) { const row = await get(`SELECT 1 FROM goals WHERE id = ?`, [id]); return !!row; }
+
+// ----------------------
+// Schema + Migrações simples
+// ----------------------
+async function addColumnIfMissing(table, column, definition) {
+  const cols = await all(`PRAGMA table_info(${table})`);
+  const has = Array.isArray(cols) && cols.some(c => c.name === column);
+  if (!has) { try { await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);} catch(_){} }
+}
+
+async function ensureMigrations() {
+  await addColumnIfMissing('recurrences', 'goal_id', 'INTEGER');
+}
+
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,6 +150,7 @@ db.serialize(() => {
     end_date TEXT,
     next_run TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1
+    -- goal_id será adicionado por migração
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_recur_next ON recurrences(next_run, active)`);
 
@@ -154,19 +180,8 @@ db.serialize(() => {
   db.run(`CREATE INDEX IF NOT EXISTS idx_goal_contrib_goal_date ON goal_contributions(goal_id, date)`);
 });
 
-// ----------------------
-// Helpers (DB)
-// ----------------------
-function run(sql, params = []) { return new Promise((resolve, reject) => db.run(sql, params, function (err) { if (err) reject(err); else resolve(this); })); }
-function all(sql, params = []) { return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => { if (err) reject(err); else resolve(rows); })); }
-function get(sql, params = []) { return new Promise((resolve, reject) => db.get(sql, params, (err, row) => { if (err) reject(err); else resolve(row); })); }
-async function existsCategory(name) { const row = await get(`SELECT 1 FROM categories WHERE name = ?`, [String(name || '').trim()]); return !!row; }
-async function ensureCategory(name) {
-  const ok = await existsCategory(name);
-  if (ok) return;
-  const parsed = parseColor(undefined, name); // cor automática
-  await run(`INSERT INTO categories (name, color) VALUES (?, ?)`, [name, parsed.color]);
-}
+// dispara migração simples (não bloqueante)
+ensureMigrations().catch(()=>{});
 
 // ping
 app.get('/', (_req, res) => res.send('API OK'));
@@ -283,7 +298,7 @@ app.get('/api/transactions', async (req, res) => {
 
 app.post('/api/transactions', async (req, res) => {
   try {
-    const { date, description, category, type, amount } = req.body || {};
+    const { date, description, category, type, amount, goal_id } = req.body || {};
     const amt = typeof amount === 'number' ? amount : parseFloat(String(amount).replace(',', '.'));
     if (!date || !description || !category || !type || !Number.isFinite(amt)) {
       return res.status(400).json({ error: 'Campos: date, description, category, type, amount(number).' });
@@ -294,10 +309,29 @@ app.post('/api/transactions', async (req, res) => {
     const ok = await existsCategory(category);
     if (!ok) return res.status(400).json({ error: 'Categoria inexistente. Escolha uma categoria válida.' });
 
+    let gid = null;
+    if (goal_id !== undefined && goal_id !== null && goal_id !== '') {
+      const id = Number(goal_id);
+      if (!Number.isInteger(id)) return res.status(400).json({ error: 'goal_id inválido.' });
+      const gOk = await goalExists(id);
+      if (!gOk) return res.status(404).json({ error: 'Meta não encontrada.' });
+      gid = id;
+    }
+
     const stmt = await run(
       `INSERT INTO transactions (date, description, category, type, amount) VALUES (?, ?, ?, ?, ?)`,
       [date, String(description).trim(), String(category).trim(), type, amt]
     );
+
+    if (gid) {
+      const signed = type === 'expense' ? Math.abs(amt) : -Math.abs(amt);
+      await run(
+        `INSERT INTO goal_contributions (goal_id, date, amount, transaction_id, source)
+         VALUES (?, ?, ?, ?, 'transaction')`,
+        [gid, date, signed, stmt.lastID]
+      );
+    }
+
     const row = await get(`SELECT * FROM transactions WHERE id = ?`, [stmt.lastID]);
     res.status(201).json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -367,7 +401,7 @@ app.get('/api/recurrences', async (_req, res) => {
 
 app.post('/api/recurrences', async (req, res) => {
   try {
-    let { description, category, type, amount, frequency, interval, start_date, end_date, active } = req.body || {};
+    let { description, category, type, amount, frequency, interval, start_date, end_date, active, goal_id } = req.body || {};
     const amt = typeof amount === 'number' ? amount : parseFloat(String(amount).replace(',', '.'));
     description = String(description || '').trim();
     category = String(category || '').trim();
@@ -378,18 +412,28 @@ app.post('/api/recurrences', async (req, res) => {
     end_date = end_date ? String(end_date).trim() : null;
     active = active === undefined ? 1 : (Number(Boolean(active)) ? 1 : 0);
 
+    let gid = null;
+    if (goal_id !== undefined && goal_id !== null && goal_id !== '') {
+      const id = Number(goal_id);
+      if (!Number.isInteger(id)) return res.status(400).json({ error: 'goal_id inválido.' });
+      const gOk = await goalExists(id);
+      if (!gOk) return res.status(404).json({ error: 'Meta não encontrada.' });
+      gid = id;
+      // boa prática: garantir categoria "Metas" caso queira usá-la
+      if (category.toLowerCase() === 'metas') await ensureCategory('Metas');
+    }
+
     if (!description || !category || !type || !Number.isFinite(amt) || !start_date || !VALID_FREQ.has(frequency)) {
       return res.status(400).json({ error: 'Campos obrigatórios: description, category, type, amount, frequency (daily|weekly|monthly), start_date.' });
     }
     if (!['income','expense'].includes(type)) return res.status(400).json({ error: "type deve ser 'income' ou 'expense'." });
     if (!(interval >= 1 && Number.isInteger(interval))) return res.status(400).json({ error: 'interval deve ser inteiro >= 1.' });
-    if (!(await existsCategory(category))) return res.status(400).json({ error: 'Categoria inexistente.' });
 
     const next_run = computeInitialNextRun(start_date, frequency, interval, end_date);
     const stmt = await run(
-      `INSERT INTO recurrences (description, category, type, amount, frequency, interval, start_date, end_date, next_run, active)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [description, category, type, amt, frequency, interval, start_date, end_date, next_run, active]
+      `INSERT INTO recurrences (description, category, type, amount, frequency, interval, start_date, end_date, next_run, active, goal_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [description, category, type, amt, frequency, interval, start_date, end_date, next_run, active, gid]
     );
     const row = await get(`SELECT * FROM recurrences WHERE id = ?`, [stmt.lastID]);
     res.status(201).json(row);
@@ -413,7 +457,7 @@ app.patch('/api/recurrences/:id', async (req, res) => {
     }
     if (req.body.category !== undefined) {
       fields.category = String(req.body.category).trim();
-      if (!(await existsCategory(fields.category))) return res.status(400).json({ error: 'Categoria inexistente.' });
+      if (fields.category.toLowerCase() === 'metas') await ensureCategory('Metas');
     }
     if (req.body.type !== undefined) {
       fields.type = String(req.body.type).trim();
@@ -441,6 +485,17 @@ app.patch('/api/recurrences/:id', async (req, res) => {
     }
     if (req.body.active !== undefined) {
       fields.active = Number(Boolean(req.body.active));
+    }
+    if (req.body.goal_id !== undefined) {
+      if (req.body.goal_id === null) {
+        fields.goal_id = null;
+      } else {
+        const gid = Number(req.body.goal_id);
+        if (!Number.isInteger(gid)) return res.status(400).json({ error: 'goal_id inválido.' });
+        const gOk = await goalExists(gid);
+        if (!gOk) return res.status(404).json({ error: 'Meta não encontrada.' });
+        fields.goal_id = gid;
+      }
     }
 
     for (const [k,v] of Object.entries(fields)) { set.push(`${k} = ?`); params.push(v); }
@@ -487,22 +542,19 @@ app.post('/api/recurrences/:id/run', async (req, res) => {
     const doForce = force === '1' || force === 'true';
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
 
-    if (!doForce) {
-      const count = await processRecurrences(id);
-      return res.json({ ok: true, generated: count });
-    }
-
     const r = await get(`SELECT * FROM recurrences WHERE id = ?`, [id]);
     if (!r) return res.status(404).json({ error: 'Recorrência não encontrada.' });
     if (r.active !== 1) return res.status(409).json({ error: 'Recorrência pausada.' });
 
     const today = todayLocalISO();
 
-    if (r.next_run <= today) {
+    // se está vencida ou igual a hoje, delega pro processador normal
+    if (!doForce || r.next_run <= today) {
       const count = await processRecurrences(id);
       return res.json({ ok: true, generated: count });
     }
 
+    // Forçar HOJE com dedupe
     const exists = await get(
       `SELECT 1 FROM transactions 
        WHERE date=? AND description=? AND category=? AND type=? AND amount=? LIMIT 1`,
@@ -514,11 +566,23 @@ app.post('/api/recurrences/:id/run', async (req, res) => {
       return res.json({ ok: true, generated: 0, deduped: true });
     }
 
-    await run(
+    // cria transação
+    const ins = await run(
       `INSERT INTO transactions (date, description, category, type, amount)
        VALUES (?, ?, ?, ?, ?)`,
       [today, r.description, r.category, r.type, r.amount]
     );
+
+    // se estiver vinculada a meta, cria contribuição
+    if (r.goal_id) {
+      const signed = r.type === 'expense' ? Math.abs(r.amount) : -Math.abs(r.amount);
+      await run(
+        `INSERT INTO goal_contributions (goal_id, date, amount, transaction_id, source)
+         VALUES (?, ?, ?, ?, 'recurrence')`,
+        [r.goal_id, today, signed, ins.lastID]
+      );
+    }
+
     const next = advance(today, r.frequency, r.interval);
     await run(`UPDATE recurrences SET next_run = ? WHERE id = ?`, [next, r.id]);
 
@@ -548,11 +612,21 @@ async function processRecurrences(onlyId = null) {
     let safety = 0;
     const limit = r.end_date || '9999-12-31';
     while (next <= today && next <= limit && safety++ < 100) {
-      await run(
+      const ins = await run(
         `INSERT INTO transactions (date, description, category, type, amount)
          VALUES (?, ?, ?, ?, ?)`,
+
         [next, r.description, r.category, r.type, r.amount]
       );
+      // contribuição automática se tiver goal_id
+      if (r.goal_id) {
+        const signed = r.type === 'expense' ? Math.abs(r.amount) : -Math.abs(r.amount);
+        await run(
+          `INSERT INTO goal_contributions (goal_id, date, amount, transaction_id, source)
+           VALUES (?, ?, ?, ?, 'recurrence')`,
+          [r.goal_id, next, signed, ins.lastID]
+        );
+      }
       generated++;
       next = advance(next, r.frequency, r.interval);
     }
@@ -726,7 +800,7 @@ app.delete('/api/goals/:id', async (req, res) => {
 app.get('/api/goals/:id/contributions', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const rows = await all(`SELECT * FROM goal_contributions WHERE goal_id = ? ORDER BY date DESC, id DESC`, [id]);
+    const rows = await all(`SELECT * FROM goal_contributions WHERE goal_id = ? ORDER BY date ASC, id ASC`, [id]);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react'; 
 import Modal from '../ui/Modal';
 import ConfirmDialog from '../ui/ConfirmDialog';
 
@@ -40,6 +40,21 @@ export default function GoalsPage() {
 
   // excluir meta
   const [toDelete, setToDelete] = useState(null);
+
+  // automatizar (recorrência vinculada à meta)
+  const [openAuto, setOpenAuto] = useState(false);
+  const [autoGoal, setAutoGoal] = useState(null);
+  const [autoType, setAutoType] = useState('expense'); // depósito=expense / retirada=income
+  const [autoAmount, setAutoAmount] = useState('');
+  const [autoFreq, setAutoFreq] = useState('monthly');
+  const [autoInterval, setAutoInterval] = useState(1);
+  const [autoStart, setAutoStart] = useState(() => {
+    const d = new Date(); d.setMonth(d.getMonth()+1, 1);
+    return d.toISOString().slice(0,10);
+  });
+  const [autoCat, setAutoCat] = useState('Metas'); // padrão útil
+  const [showTimeline, setShowTimeline] = useState({}); // id -> bool
+  const [timelineData, setTimelineData] = useState({}); // id -> [{date, cum}]
 
   async function load() {
     setLoading(true);
@@ -114,10 +129,9 @@ export default function GoalsPage() {
     if (r.ok) load();
   }
 
-  // EXCLUSÃO DEFINITIVA: apaga contribuições e transações ligadas a elas
   async function deleteGoalNow() {
     if (!toDelete) return;
-    const r = await fetch(`${API_URL}/api/goals/${toDelete.id}?force=1`, { method: 'DELETE' });
+    const r = await fetch(`${API_URL}/api/goals/${toDelete.id}`, { method: 'DELETE' });
     setToDelete(null);
     if (!r.ok) {
       const j = await r.json().catch(()=> ({}));
@@ -127,13 +141,100 @@ export default function GoalsPage() {
     }
   }
 
-  // sugestão mensal ao preencher valor + data-alvo
+  // sugestão mensal ao preencher valor + data-alvo (no modal de nova meta)
   const monthlySuggestion = (() => {
     const tgt = parseFloat(String(gTarget).replace(',', '.'));
     if (!gTargetDate || !Number.isFinite(tgt) || tgt <= 0) return null;
     const months = Math.max(1, monthsBetween(todayISO(), gTargetDate));
     return tgt / months;
   })();
+
+  // abrir modal de automatização com defaults
+  function openAutoFor(goal) {
+    setAutoGoal(goal);
+    setAutoType('expense');
+    setAutoAmount(goal.suggested_monthly ? String(Number(goal.suggested_monthly).toFixed(2)) : '');
+    setAutoFreq('monthly');
+    setAutoInterval(1);
+    const d = new Date(); d.setMonth(d.getMonth()+1, 1);
+    setAutoStart(d.toISOString().slice(0,10));
+    setAutoCat('Metas');
+    setOpenAuto(true);
+  }
+
+  async function createAutoRecurrence(e) {
+    e.preventDefault();
+    if (!autoGoal) return;
+    const amt = parseFloat(String(autoAmount).replace(',', '.'));
+    if (!Number.isFinite(amt) || amt <= 0) { alert('Valor inválido'); return; }
+    const payload = {
+      description: `Meta: ${autoGoal.name} (auto)`,
+      category: autoCat || 'Metas',
+      type: autoType, // expense=depósito | income=retirada
+      amount: amt,
+      frequency: autoFreq,
+      interval: Number(autoInterval) || 1,
+      start_date: autoStart,
+      end_date: null,
+      active: true,
+      goal_id: autoGoal.id, // 🔗 vincula à meta para criar contribuição automática
+    };
+    const r = await fetch(`${API_URL}/api/recurrences`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    });
+    const j = await r.json().catch(()=> ({}));
+    if (!r.ok) { alert(j.error || 'Erro ao criar recorrência.'); return; }
+    setOpenAuto(false);
+  }
+
+  // carregar contribuições e montar timeline cumulativa
+  async function toggleTimeline(goal) {
+    setShowTimeline(prev => ({...prev, [goal.id]: !prev[goal.id]}));
+    if (!timelineData[goal.id]) {
+      const r = await fetch(`${API_URL}/api/goals/${goal.id}/contributions`, { cache:'no-store' });
+      const arr = await r.json().catch(()=> []);
+      let cum = 0;
+      const points = arr.map(x => {
+        cum += Number(x.amount || 0);
+        return { date: x.date, cum };
+      });
+      setTimelineData(prev => ({...prev, [goal.id]: points}));
+    }
+  }
+
+  // Sparkline responsiva (viewBox + width:100%)
+  function Sparkline({ data, color='#22c55e', height=72, target=null }) {
+    const pad = 8;
+    const vw = 320; // largura "virtual" do gráfico (independente do tamanho real)
+    const xs = data.length ? data.map((_,i)=> i) : [0,1];
+    const ys = data.length ? data.map(p=> p.cum) : [0,0];
+    const minY = Math.min(0, ...ys);
+    const maxY = Math.max(1, ...ys, target ?? 0);
+
+    const scaleX = (i)=> pad + (i - xs[0]) * (vw - 2*pad) / Math.max(1, xs[xs.length-1] - xs[0]);
+    const scaleY = (y)=> {
+      const h = height - 2*pad;
+      return (height - pad) - (y - minY) * (h) / Math.max(1, (maxY - minY));
+    };
+
+    const path = data.map((p,i)=> `${i===0?'M':'L'} ${scaleX(i)} ${scaleY(p.cum)}`).join(' ');
+    const targetY = target!=null ? scaleY(target) : null;
+
+    return (
+      <svg
+        width="100%"
+        height={height}
+        viewBox={`0 0 ${vw} ${height}`}
+        preserveAspectRatio="none"
+        style={{ display:'block' }}
+      >
+        {target!=null && (
+          <line x1={pad} x2={vw-pad} y1={targetY} y2={targetY} stroke="#64748b" strokeDasharray="4 3" />
+        )}
+        <path d={path} fill="none" stroke={color} strokeWidth="2" />
+      </svg>
+    );
+  }
 
   return (
     <div className="page">
@@ -170,9 +271,11 @@ export default function GoalsPage() {
                   <div className="helper">Sugestão: {fmtBRL(g.suggested_monthly || 0)} / mês até {toDateLabel(g.target_date)}</div>
                 ) : null}
 
-                <div className="goal-actions">
+                <div className="goal-actions" style={{ gap: 6, flexWrap: 'wrap' }}>
                   <button className="button" onClick={()=> openContribModal(g, 'deposit')}>Contribuir</button>
                   <button className="button" onClick={()=> openContribModal(g, 'withdraw')}>Retirar</button>
+                  <button className="button" onClick={()=> openAutoFor(g)}>Automatizar</button>
+                  <button className="button" onClick={()=> toggleTimeline(g)}>{showTimeline[g.id] ? 'Fechar timeline' : 'Timeline'}</button>
                   {g.status !== 'achieved' && g.percent >= 100 ? (
                     <button className="button" onClick={()=> setStatus(g, 'achieved')}>Concluir</button>
                   ) : null}
@@ -181,6 +284,27 @@ export default function GoalsPage() {
                   </button>
                   <button className="button button-danger" onClick={()=> setToDelete(g)}>Excluir</button>
                 </div>
+
+                {showTimeline[g.id] && (
+                  <div className="goal-timeline">
+                    {!timelineData[g.id] ? (
+                      <div className="helper">Carregando timeline…</div>
+                    ) : timelineData[g.id].length === 0 ? (
+                      <div className="helper">Sem contribuições para exibir.</div>
+                    ) : (
+                      <div style={{ display:'grid', gap:8 }}>
+                        <Sparkline
+                          data={timelineData[g.id]}
+                          color={g.color}
+                          target={g.target_amount}
+                        />
+                        <div className="helper">
+                          Evolução do saldo da meta (linha contínua). Linha tracejada = valor alvo.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -277,6 +401,54 @@ export default function GoalsPage() {
             <div className="full modal-actions">
               <button className="button button-success" type="submit">{mode==='deposit' ? 'Contribuir' : 'Retirar'}</button>
               <button className="button" type="button" onClick={()=> setOpenContrib(false)}>Cancelar</button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Modal Automatizar (recorrência vinculada) */}
+      <Modal open={openAuto} onClose={()=> setOpenAuto(false)} title="Automatizar meta (recorrente)">
+        {autoGoal && (
+          <form className="form-grid modal-grid" onSubmit={createAutoRecurrence}>
+            <div className="full helper"><strong>Meta:</strong> {autoGoal.name}</div>
+
+            <div>
+              <label>Tipo</label>
+              <select className="select" value={autoType} onChange={(e)=> setAutoType(e.target.value)}>
+                <option value="expense">Depósito (despesa)</option>
+                <option value="income">Retirada (receita)</option>
+              </select>
+            </div>
+            <div>
+              <label>Valor</label>
+              <input className="input" type="number" inputMode="decimal" step="0.01" min="0.01" value={autoAmount} onChange={(e)=> setAutoAmount(e.target.value)} placeholder="Ex.: 300" required />
+            </div>
+            <div>
+              <label>Categoria</label>
+              <input className="input" value={autoCat} onChange={(e)=> setAutoCat(e.target.value)} placeholder='Ex.: Metas' />
+              <div className="helper">Dica: use "Metas" para separar no relatório.</div>
+            </div>
+            <div>
+              <label>Frequência</label>
+              <select className="select" value={autoFreq} onChange={(e)=> setAutoFreq(e.target.value)}>
+                <option value="monthly">Mensal</option>
+                <option value="weekly">Semanal</option>
+                <option value="daily">Diária</option>
+              </select>
+            </div>
+            <div>
+              <label>Intervalo</label>
+              <input className="input" type="number" min={1} value={autoInterval} onChange={(e)=> setAutoInterval(Math.max(1, Number(e.target.value)||1))} />
+              <div className="helper">1 = todo período, 2 = a cada 2 períodos…</div>
+            </div>
+            <div>
+              <label>Início</label>
+              <input className="input" type="date" value={autoStart} onChange={(e)=> setAutoStart(e.target.value)} />
+            </div>
+
+            <div className="full modal-actions">
+              <button className="button button-success" type="submit">Criar recorrência</button>
+              <button className="button" type="button" onClick={()=> setOpenAuto(false)}>Cancelar</button>
             </div>
           </form>
         )}

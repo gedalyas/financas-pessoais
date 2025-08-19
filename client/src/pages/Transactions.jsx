@@ -40,12 +40,17 @@ export default function TransactionsPage() {
   const [tType, setTType] = useState('expense');
   const [amount, setAmount] = useState('');
 
+  // Meta (opcional)
+  const [goalId, setGoalId] = useState('');
+  const [goals, setGoals] = useState([]);
+
   // 🔁 recorrência (opcional)
   const [makeRecurring, setMakeRecurring] = useState(false);
   const [recFreq, setRecFreq] = useState('monthly'); // daily | weekly | monthly
   const [recInterval, setRecInterval] = useState(1); // a cada N períodos
   const [recStart, setRecStart] = useState(() => nextFrom(new Date().toISOString().slice(0,10), 'monthly', 1));
   const [recEnd, setRecEnd] = useState('');
+  const [onlyRecurring, setOnlyRecurring] = useState(false); // << NOVO
 
   // dados
   const [items, setItems] = useState([]);
@@ -72,6 +77,14 @@ export default function TransactionsPage() {
         const list = await res.json();
         setCategoriesAll(Array.isArray(list) ? list : []);
       }
+    } catch {}
+  }
+  async function fetchGoals() {
+    try {
+      const r = await fetch(`${API_URL}/api/goals`, { cache: 'no-store' });
+      if (!r.ok) return;
+      const j = await r.json();
+      setGoals((Array.isArray(j) ? j : []).filter(g => g.status === 'active'));
     } catch {}
   }
 
@@ -103,7 +116,7 @@ export default function TransactionsPage() {
   }
 
   async function reloadAll() {
-    await Promise.all([fetchCategories(), fetchData()]);
+    await Promise.all([fetchCategories(), fetchGoals(), fetchData()]);
   }
 
   useEffect(() => {
@@ -134,9 +147,19 @@ export default function TransactionsPage() {
   useEffect(() => {
     if (makeRecurring) {
       setRecStart(nextFrom(date, recFreq, recInterval));
+    } else {
+      setOnlyRecurring(false); // desmarca quando não é recorrente
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [makeRecurring, date, recFreq, recInterval]);
+
+  // auto-marcar "apenas agendar" quando o início é futuro em relação à data do lançamento
+  useEffect(() => {
+    if (makeRecurring && recStart && date && recStart > date) {
+      setOnlyRecurring(true);
+    }
+    // não força desmarcar se o usuário definiu manualmente
+  }, [makeRecurring, recStart, date]);
 
   // atalhos de período
   function setThisMonth() {
@@ -169,13 +192,53 @@ export default function TransactionsPage() {
       return;
     }
 
-    // 1) cria a transação normalmente
+    // Se for "apenas agendar recorrência", NÃO cria transação agora.
+    if (makeRecurring && onlyRecurring) {
+      const recurPayload = {
+        description: description.trim(),
+        category: category.trim(),
+        type: tType,
+        amount: value,
+        frequency: recFreq,              // 'daily' | 'weekly' | 'monthly'
+        interval: Number(recInterval) || 1,
+        start_date: recStart || nextFrom(date, recFreq, recInterval),
+        end_date: recEnd || null,
+        active: true,
+        goal_id: goalId || undefined,
+      };
+      const rr = await fetch(`${API_URL}/api/recurrences`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(recurPayload),
+      });
+      const rj = await rr.json().catch(() => ({}));
+      if (!rr.ok) {
+        setErr(rj.error || 'Erro ao criar recorrência.');
+        return;
+      }
+      // limpa form
+      setDescription('');
+      setAmount('');
+      setGoalId('');
+      setMakeRecurring(false);
+      setRecFreq('monthly');
+      setRecInterval(1);
+      setRecStart(nextFrom(date, 'monthly', 1));
+      setRecEnd('');
+      setOnlyRecurring(false);
+
+      await reloadAll();
+      return;
+    }
+
+    // 1) cria a transação normalmente (lança agora)
     const body = {
       date,
       description: description.trim(),
       category: category.trim(),
       type: tType,
       amount: value,
+      goal_id: goalId || undefined,
     };
     const res = await fetch(`${API_URL}/api/transactions`, {
       method: 'POST',
@@ -195,11 +258,12 @@ export default function TransactionsPage() {
         category: category.trim(),
         type: tType,
         amount: value,
-        frequency: recFreq,              // 'daily' | 'weekly' | 'monthly'
+        frequency: recFreq,
         interval: Number(recInterval) || 1,
-        start_date: recStart || nextFrom(date, recFreq, recInterval), // próxima por padrão
+        start_date: recStart || nextFrom(date, recFreq, recInterval),
         end_date: recEnd || null,
         active: true,
+        goal_id: goalId || undefined, // vincula à meta (se houver)
       };
       const rr = await fetch(`${API_URL}/api/recurrences`, {
         method: 'POST',
@@ -216,11 +280,13 @@ export default function TransactionsPage() {
     // limpa form
     setDescription('');
     setAmount('');
+    setGoalId('');
     setMakeRecurring(false);
     setRecFreq('monthly');
     setRecInterval(1);
     setRecStart(nextFrom(date, 'monthly', 1));
     setRecEnd('');
+    setOnlyRecurring(false);
 
     await reloadAll();
   }
@@ -333,6 +399,18 @@ export default function TransactionsPage() {
             <input className="input" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Ex.: 123.45" required />
           </div>
 
+          {/* Meta (opcional) */}
+          <div>
+            <label>Meta (opcional)</label>
+            <select className="select" value={goalId} onChange={(e)=> setGoalId(e.target.value)}>
+              <option value="">— Sem meta —</option>
+              {goals.map(g => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+            <div className="helper">Se vincular, será criada uma contribuição: despesa = depósito (+), receita = retirada (−).</div>
+          </div>
+
           {/* 🔁 tornar recorrente */}
           <div style={{ gridColumn: '1 / -1', display: 'grid', gap: 8 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -345,30 +423,44 @@ export default function TransactionsPage() {
             </label>
 
             {makeRecurring && (
-              <div className="filters-grid" style={{ marginTop: 4 }}>
-                <div>
-                  <label>Frequência</label>
-                  <select className="select" value={recFreq} onChange={(e) => setRecFreq(e.target.value)}>
-                    <option value="monthly">Mensal</option>
-                    <option value="weekly">Semanal</option>
-                    <option value="daily">Diária</option>
-                  </select>
+              <>
+                <div className="filters-grid" style={{ marginTop: 4 }}>
+                  <div>
+                    <label>Frequência</label>
+                    <select className="select" value={recFreq} onChange={(e) => setRecFreq(e.target.value)}>
+                      <option value="monthly">Mensal</option>
+                      <option value="weekly">Semanal</option>
+                      <option value="daily">Diária</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>Intervalo</label>
+                    <input className="input" type="number" min={1} value={recInterval} onChange={(e) => setRecInterval(Math.max(1, Number(e.target.value) || 1))} />
+                    <div className="helper">Ex.: 1 = todo período, 2 = a cada 2 períodos</div>
+                  </div>
+                  <div>
+                    <label>Início</label>
+                    <input className="input" type="date" value={recStart} onChange={(e) => setRecStart(e.target.value)} />
+                    <div className="helper">Padrão: próxima após {toDateLabel(date)}</div>
+                  </div>
+                  <div>
+                    <label>Fim (opcional)</label>
+                    <input className="input" type="date" value={recEnd} onChange={(e) => setRecEnd(e.target.value)} />
+                  </div>
                 </div>
-                <div>
-                  <label>Intervalo</label>
-                  <input className="input" type="number" min={1} value={recInterval} onChange={(e) => setRecInterval(Math.max(1, Number(e.target.value) || 1))} />
-                  <div className="helper">Ex.: 1 = todo período, 2 = a cada 2 períodos</div>
+
+                <label style={{ display:'flex', alignItems:'center', gap:8, marginTop:4 }}>
+                  <input
+                    type="checkbox"
+                    checked={onlyRecurring}
+                    onChange={(e)=> setOnlyRecurring(e.target.checked)}
+                  />
+                  Não lançar agora (apenas agendar a recorrência)
+                </label>
+                <div className="helper">
+                  Se marcado, **nenhuma** transação será criada agora; só a regra recorrente será salva.
                 </div>
-                <div>
-                  <label>Início</label>
-                  <input className="input" type="date" value={recStart} onChange={(e) => setRecStart(e.target.value)} />
-                  <div className="helper">Padrão: próxima após {toDateLabel(date)}</div>
-                </div>
-                <div>
-                  <label>Fim (opcional)</label>
-                  <input className="input" type="date" value={recEnd} onChange={(e) => setRecEnd(e.target.value)} />
-                </div>
-              </div>
+              </>
             )}
           </div>
 
@@ -378,7 +470,7 @@ export default function TransactionsPage() {
               type="submit"
               disabled={!category || !categoriesAll.length || !categoriesAll.some((c) => c.name === category)}
             >
-              Adicionar
+              {makeRecurring && onlyRecurring ? 'Agendar recorrência' : 'Adicionar'}
             </button>
             {err && <div className="helper">⚠ {err}</div>}
           </div>

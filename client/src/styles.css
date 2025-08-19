@@ -180,5 +180,39 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1) opacit
 
 /* ——— Bolinha de cor ——— */
 .category-dot { width: 10px; height: 10px; border-radius: 50%; display:inline-block; margin-right: 6px; }
+/* Contêiner da timeline dentro do card de meta */
+.goal-timeline {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--panel-2, #0b1222);
+  max-width: 100%;
+  overflow: hidden;            /* evita "vazar" para fora do card */
+}
+
+/* Opcional: ajusta espaçamento dos cards (se não existir) */
+.cards-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+/* Heatmap simples (7 colunas = dias da semana) */
+.heatgrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+.heatcell {
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 10px 6px;
+  text-align: center;
+  color: #fff;
+}
+.heatlabel { font-size: 12px; opacity: 0.95; }
+.heatvalue { font-size: 12px; opacity: 0.9; }
+
+
 
 
