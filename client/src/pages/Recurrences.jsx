@@ -183,7 +183,7 @@ export default function RecurrencesPage() {
             <label htmlFor="active"> Ativo</label>
           </div>
 
-          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <button className="button button-success" disabled={runningId !== null}>Criar recorrência</button>
             {err && <div className="helper">⚠ {err}</div>}
           </div>
@@ -208,51 +208,54 @@ export default function RecurrencesPage() {
               </tr>
             </thead>
             <tbody>
-              {sorted.map(r => (
-                <tr key={r.id}>
-                  <td>{toDateLabel(r.next_run)}</td>
-                  <td>{r.description}</td>
-                  <td>{r.category}</td>
-                  <td><span className={`badge ${r.type}`}>{r.type === 'income' ? 'Receita' : 'Despesa'}</span></td>
-                  <td>{fmtBRL(r.amount)}</td>
-                  <td>{FREQ_OPTIONS.find(o => o.value === r.frequency)?.label} x{r.interval}</td>
-                  <td>{r.active ? 'Ativo' : 'Pausado'}</td>
-                  <td>
-                    <div className="row-actions">
-                      <button
-                        className="button"
-                        onClick={() => runPending(r)}
-                        disabled={runningId === r.id}
-                        title="Gera todas as pendentes até hoje"
-                      >
-                        Gerar pendentes
-                      </button>
-                      <button
-                        className="button"
-                        onClick={() => setToRunForce(r)}
-                        disabled={runningId === r.id}
-                        title="Cria um lançamento HOJE e reprograma a próxima"
-                      >
-                        Lançar hoje
-                      </button>
-                      <button
-                        className="button"
-                        onClick={() => toggleActive(r)}
-                        disabled={runningId === r.id}
-                      >
-                        {r.active ? 'Pausar' : 'Ativar'}
-                      </button>
-                      <button
-                        className="button button-danger"
-                        onClick={() => setToDelete(r)}
-                        disabled={runningId === r.id}
-                      >
-                        Excluir
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {sorted.map(r => {
+                const freqLabel = FREQ_OPTIONS.find(o => o.value === r.frequency)?.label || r.frequency;
+                return (
+                  <tr key={r.id}>
+                    <td data-label="Próxima">{toDateLabel(r.next_run)}</td>
+                    <td data-label="Descrição" style={{ wordBreak: 'break-word' }} title={r.description}>{r.description}</td>
+                    <td data-label="Categoria">{r.category}</td>
+                    <td data-label="Tipo"><span className={`badge ${r.type}`}>{r.type === 'income' ? 'Receita' : 'Despesa'}</span></td>
+                    <td data-label="Valor">{fmtBRL(r.amount)}</td>
+                    <td data-label="Frequência">{freqLabel} ×{r.interval}</td>
+                    <td data-label="Status">{r.active ? 'Ativo' : 'Pausado'}</td>
+                    <td data-label="Ações">
+                      <div className="row-actions" style={{ flexWrap: 'wrap', gap: 6 }}>
+                        <button
+                          className="button"
+                          onClick={() => runPending(r)}
+                          disabled={runningId === r.id}
+                          title="Gera todas as pendentes até hoje"
+                        >
+                          Pendentes
+                        </button>
+                        <button
+                          className="button"
+                          onClick={() => setToRunForce(r)}
+                          disabled={runningId === r.id}
+                          title="Cria um lançamento HOJE e reprograma a próxima"
+                        >
+                          Hoje
+                        </button>
+                        <button
+                          className="button"
+                          onClick={() => toggleActive(r)}
+                          disabled={runningId === r.id}
+                        >
+                          {r.active ? 'Pausar' : 'Ativar'}
+                        </button>
+                        <button
+                          className="button button-danger"
+                          onClick={() => setToDelete(r)}
+                          disabled={runningId === r.id}
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
