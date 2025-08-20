@@ -320,3 +320,15 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1) opacit
   /* Heatmap compacto */
   .heatgrid { grid-template-columns: repeat(3, 1fr); }
 }
+/* Mobile: reserva espaço do botão hambúrguer à esquerda
+   (12px de margem + 36px do botão + 8px de respiro = 56px) */
+@media (max-width: 900px) {
+  .header .title {
+    padding-left: 56px;   /* só indenta o texto do título */
+  }
+}
+@media (max-width: 900px) {
+  .sidebar .sidebar-brand { padding-left: 56px; }
+}
+
+
