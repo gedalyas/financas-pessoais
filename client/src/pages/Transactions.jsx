@@ -6,6 +6,12 @@ import CategoryDialog from '../ui/CategoryDialog';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
+// Adiciona Authorization em todas as chamadas autenticadas
+const authHeaders = () => {
+  const t = localStorage.getItem('pf_token');
+  return t ? { Authorization: `Bearer ${t}` } : {};
+};
+
 const fmtBRL = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v ?? 0);
 const toDateLabel = (iso) => (iso ? new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR') : '');
 const d2iso = (d) => d.toISOString().slice(0, 10);
@@ -66,10 +72,16 @@ export default function TransactionsPage() {
 
   async function fetchCategories() {
     try {
-      const res = await fetch(`${API_URL}/api/categories`, { cache: 'no-store' });
+      const res = await fetch(`${API_URL}/api/categories`, {
+        cache: 'no-store',
+        headers: authHeaders(),
+      });
       if (res.ok) {
         const list = await res.json();
         setCategoriesAll(Array.isArray(list) ? list : []);
+      } else if (res.status === 401) {
+        // opcional: redirecionar para login
+        // window.location.href = '/auth';
       }
     } catch {}
   }
@@ -85,8 +97,8 @@ export default function TransactionsPage() {
       if (categoryFilter !== 'all') q.set('category', categoryFilter);
 
       const [txRes, sumRes] = await Promise.all([
-        fetch(`${API_URL}/api/transactions?${q.toString()}`, { cache: 'no-store' }),
-        fetch(`${API_URL}/api/summary?${q.toString()}`, { cache: 'no-store' }),
+        fetch(`${API_URL}/api/transactions?${q.toString()}`, { cache: 'no-store', headers: authHeaders() }),
+        fetch(`${API_URL}/api/summary?${q.toString()}`,      { cache: 'no-store', headers: authHeaders() }),
       ]);
 
       if (!txRes.ok) throw new Error('Erro ao buscar transações');
@@ -178,7 +190,7 @@ export default function TransactionsPage() {
     };
     const res = await fetch(`${API_URL}/api/transactions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(body),
     });
     const j = await res.json().catch(() => ({}));
@@ -202,7 +214,7 @@ export default function TransactionsPage() {
       };
       const rr = await fetch(`${API_URL}/api/recurrences`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify(recurPayload),
       });
       const rj = await rr.json().catch(() => ({}));
@@ -226,7 +238,10 @@ export default function TransactionsPage() {
 
   async function deleteTxNow() {
     if (!txToDelete) return;
-    const res = await fetch(`${API_URL}/api/transactions/${txToDelete.id}`, { method: 'DELETE' });
+    const res = await fetch(`${API_URL}/api/transactions/${txToDelete.id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
     setTxToDelete(null);
     if (res.ok) fetchData();
   }

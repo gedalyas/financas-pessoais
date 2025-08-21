@@ -1,7 +1,20 @@
 // client/src/CategoriesPanel.jsx
 import React, { useEffect, useState } from 'react';
 import ConfirmDialog from './ui/ConfirmDialog';
-const API_URL = 'http://localhost:5000';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+function getToken() {
+  return localStorage.getItem('pf_token') || '';
+}
+
+function authHeaders(extra = {}) {
+  const t = getToken();
+  return {
+    ...(extra || {}),
+    ...(t ? { Authorization: `Bearer ${t}` } : {}),
+  };
+}
 
 export default function CategoriesPanel({ onChanged }) {
   const [list, setList] = useState([]);
@@ -13,14 +26,30 @@ export default function CategoriesPanel({ onChanged }) {
   const [catToDelete, setCatToDelete] = useState(null); // {id, name}
 
   async function load() {
-    const res = await fetch(`${API_URL}/api/categories`, { cache: 'no-store' });
-    const data = await res.json();
-    const arr = Array.isArray(data) ? data : [];
-    setList(arr);
-    onChanged && onChanged();
+    setErr(null);
+    try {
+      const res = await fetch(`${API_URL}/api/categories`, {
+        cache: 'no-store',
+        headers: authHeaders(),
+      });
+      if (res.status === 401) {
+        setErr('⚠ Autenticação obrigatória.');
+        setList([]);
+        return;
+      }
+      const data = await res.json().catch(() => []);
+      const arr = Array.isArray(data) ? data : [];
+      setList(arr);
+      onChanged && onChanged();
+    } catch (e) {
+      setErr('Falha ao carregar categorias.');
+    }
   }
 
-  useEffect(() => { load(); /* eslint-disable-line */ }, []);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function onCreate(e) {
     e.preventDefault();
@@ -30,32 +59,47 @@ export default function CategoriesPanel({ onChanged }) {
 
     const res = await fetch(`${API_URL}/api/categories`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
     const j = await res.json().catch(() => ({}));
+
+    if (res.status === 401) { setErr('⚠ Autenticação obrigatória.'); return; }
     if (!res.ok) { setErr(j.error || 'Erro ao criar'); return; }
-    setName(''); setColor('');
+
+    setName('');
+    setColor('');
     await load();
   }
 
   async function onUpdate(id, fields) {
+    setErr(null);
     const res = await fetch(`${API_URL}/api/categories/${id}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(fields),
     });
     const j = await res.json().catch(() => ({}));
+
+    if (res.status === 401) { setErr('⚠ Autenticação obrigatória.'); return; }
     if (!res.ok) { alert(j.error || 'Erro ao atualizar'); return; }
+
     await load();
   }
 
   async function deleteCategoryNow() {
     if (!catToDelete) return;
-    const res = await fetch(`${API_URL}/api/categories/${catToDelete.id}`, { method: 'DELETE' });
+    setErr(null);
+    const res = await fetch(`${API_URL}/api/categories/${catToDelete.id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
     const j = await res.json().catch(() => ({}));
     setCatToDelete(null);
+
+    if (res.status === 401) { setErr('⚠ Autenticação obrigatória.'); return; }
     if (!res.ok) { alert(j.error || 'Erro ao excluir'); return; }
+
     await load();
   }
 
@@ -64,7 +108,13 @@ export default function CategoriesPanel({ onChanged }) {
       <h3 style={{ margin: '0 0 8px' }}>Gerenciar Categorias</h3>
 
       <form onSubmit={onCreate} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <input className="input" placeholder="Nome" value={name} onChange={(e) => setName(e.target.value)} required />
+        <input
+          className="input"
+          placeholder="Nome"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
         <input
           className="input"
           placeholder="Cor (opcional: azul / #22c55e)"
@@ -73,7 +123,7 @@ export default function CategoriesPanel({ onChanged }) {
           title="Digite nome PT (ex.: azul) ou #hex. Vazio = cor automática."
         />
         <button className="button button-success">Adicionar</button>
-        {err && <div className="helper">⚠ {err}</div>}
+        {err && <div className="helper">{err}</div>}
       </form>
 
       <div className="table-wrap" style={{ marginTop: 12 }}>
@@ -116,7 +166,10 @@ export default function CategoriesPanel({ onChanged }) {
                 </td>
                 <td>
                   <div className="row-actions">
-                    <button className="button button-danger" onClick={() => setCatToDelete({ id: c.id, name: c.name })}>
+                    <button
+                      className="button button-danger"
+                      onClick={() => setCatToDelete({ id: c.id, name: c.name })}
+                    >
                       Excluir
                     </button>
                   </div>
@@ -125,7 +178,9 @@ export default function CategoriesPanel({ onChanged }) {
             ))}
             {list.length === 0 && (
               <tr>
-                <td colSpan={3}><div className="helper">Nenhuma categoria ainda.</div></td>
+                <td colSpan={3}>
+                  <div className="helper">Nenhuma categoria ainda.</div>
+                </td>
               </tr>
             )}
           </tbody>

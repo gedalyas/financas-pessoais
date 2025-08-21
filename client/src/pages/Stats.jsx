@@ -1,3 +1,4 @@
+// client/src/pages/Stats.jsx (ou StatsPage.jsx)
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ResponsiveContainer, PieChart, Pie, Cell,
@@ -6,6 +7,14 @@ import {
 import { useNavigate } from 'react-router-dom';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+function getToken() {
+  return localStorage.getItem('pf_token') || '';
+}
+function authHeaders(extra = {}) {
+  const t = getToken();
+  return { ...(extra || {}), ...(t ? { Authorization: `Bearer ${t}` } : {}) };
+}
 
 const fmtBRL = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v ?? 0);
 const monthLabel = (ym) => {
@@ -22,23 +31,40 @@ export default function StatsPage() {
   const [summary, setSummary] = useState({ byCategory: [], income: 0, expense: 0, balance: 0 });
   const [tx, setTx] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
 
   async function fetchAll() {
     setLoading(true);
+    setErr('');
     try {
       const q = new URLSearchParams();
       if (from) q.set('from', from);
       if (to) q.set('to', to);
 
       const [sumRes, txRes] = await Promise.all([
-        fetch(`${API_URL}/api/summary?${q.toString()}`, { cache: 'no-store' }),
-        fetch(`${API_URL}/api/transactions?${q.toString()}`, { cache: 'no-store' }),
+        fetch(`${API_URL}/api/summary?${q.toString()}`, { cache: 'no-store', headers: authHeaders() }),
+        fetch(`${API_URL}/api/transactions?${q.toString()}`, { cache: 'no-store', headers: authHeaders() }),
       ]);
+
+      if (sumRes.status === 401 || txRes.status === 401) {
+        setErr('⚠ Autenticação obrigatória.');
+        setSummary({ byCategory: [], income: 0, expense: 0, balance: 0 });
+        setTx([]);
+        return;
+      }
+
+      if (!sumRes.ok || !txRes.ok) {
+        setErr('Falha ao carregar dados.');
+        return;
+      }
+
       const sum = await sumRes.json();
       const rows = await txRes.json();
 
       setSummary(sum);
-      setTx(rows);
+      setTx(Array.isArray(rows) ? rows : []);
+    } catch {
+      setErr('Falha ao carregar dados.');
     } finally {
       setLoading(false);
     }
@@ -98,7 +124,7 @@ export default function StatsPage() {
     return arr.map((v, i) => ({ idx: i, label: WD[i], value: v, intensity: v / max }));
   }, [tx]);
 
-  // Anomalias: despesas muito acima do padrão da categoria ( > média + 2*desvio padrão )
+  // Anomalias
   const anomalies = useMemo(() => {
     const byCat = new Map();
     for (const t of tx) {
@@ -170,7 +196,6 @@ export default function StatsPage() {
   const fmtDiff = (n) => (n == null ? '—' : (n >= 0 ? `+${fmtBRL(n)}` : `-${fmtBRL(Math.abs(n))}`));
   const fmtPct = (p) => (p == null ? '' : ` (${p >= 0 ? '+' : ''}${p.toFixed(0)}%)`);
 
-  // mini bloco do comparativo
   function MetricComp({ title, keyName, data }) {
     const color = diffColor(keyName, data.diff);
     return (
@@ -184,7 +209,6 @@ export default function StatsPage() {
     );
   }
 
-  // mini componente do heatmap
   function HeatWeekday({ data }) {
     return (
       <div className="heatgrid">
@@ -222,6 +246,7 @@ export default function StatsPage() {
         <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
           <button className="button" onClick={fetchAll}>Aplicar filtros</button>
           <button className="button" onClick={() => { setFrom(''); setTo(''); fetchAll(); }}>Limpar</button>
+          {err && <div className="helper">⚠ {err}</div>}
         </div>
       </section>
 

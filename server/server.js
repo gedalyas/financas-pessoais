@@ -1,4 +1,5 @@
-// server.js — API de Finanças Pessoais (categorias + transações + recorrentes + metas)
+// server.js — API de Finanças Pessoais (multiusuário: categorias + transações + recorrentes + metas)
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
@@ -11,11 +12,21 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 const DB_FILE = path.join(__dirname, 'db.sqlite');
-const db = new sqlite3.Database(DB_FILE);
+const db = new sqlite3.Database(DB_FILE, (err) => {
+  if (err) console.error('Erro ao abrir DB:', err);
+});
 
-// ----------------------
-// Paleta + nomes PT (categorias)
-// ----------------------
+// Habilita FKs no SQLite
+db.serialize(() => {
+  db.run('PRAGMA foreign_keys = ON');
+  db.run('PRAGMA journal_mode = WAL'); // melhor concorrência
+});
+
+// ================ AUTH ================
+const mountAuth = require('./auth');
+mountAuth(app, db);
+
+// ================ CORES / CATEGORIAS ================
 const PALETTE = [
   '#22c55e', '#ef4444', '#3b82f6', '#a855f7', '#f59e0b', '#10b981',
   '#f43f5e', '#8b5cf6', '#14b8a6', '#eab308', '#06b6d4', '#84cc16'
@@ -60,9 +71,7 @@ function parseColor(colorInput, categoryName) {
   return { ok: false, error: `Cor indisponível. Use um #hex ou um dos nomes: ${list}.` };
 }
 
-// ----------------------
-// Datas locais (corrige UTC)
-// ----------------------
+// ================ DATAS (corrige UTC) ================
 function todayLocalISO() {
   const d = new Date();
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -93,119 +102,325 @@ function computeInitialNextRun(start_date, freq, interval, end_date) {
   return next;
 }
 
-// ----------------------
-// Helpers (DB)
-// ----------------------
-function run(sql, params = []) { return new Promise((resolve, reject) => db.run(sql, params, function (err) { if (err) reject(err); else resolve(this); })); }
-function all(sql, params = []) { return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => { if (err) reject(err); else resolve(rows); })); }
-function get(sql, params = []) { return new Promise((resolve, reject) => db.get(sql, params, (err, row) => { if (err) reject(err); else resolve(row); })); }
-async function existsCategory(name) { const row = await get(`SELECT 1 FROM categories WHERE name = ?`, [String(name || '').trim()]); return !!row; }
-async function ensureCategory(name) {
-  const ok = await existsCategory(name);
+// ================ HELPERS DB ================
+function run(sql, params = []) {
+  return new Promise((resolve, reject) =>
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve(this);
+    })
+  );
+}
+
+function all(sql, params = []) {
+  return new Promise((resolve, reject) =>
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    })
+  );
+}
+
+function get(sql, params = []) {
+  return new Promise((resolve, reject) =>
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    })
+  );
+}
+
+// ✅ Helper novo: existe a tabela?
+async function tableExists(table) {
+  const row = await get(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name = ?`,
+    [table]
+  );
+  return !!row;
+}
+
+// Helpers específicos com user_id
+async function existsCategory(userId, name) {
+  const row = await get(`SELECT 1 FROM categories WHERE user_id = ? AND name = ?`, [userId, String(name || '').trim()]);
+  return !!row;
+}
+async function ensureCategory(userId, name) {
+  const ok = await existsCategory(userId, name);
   if (ok) return;
   const parsed = parseColor(undefined, name); // cor automática
-  await run(`INSERT INTO categories (name, color) VALUES (?, ?)`, [name, parsed.color]);
+  await run(`INSERT INTO categories (user_id, name, color) VALUES (?, ?, ?)`, [userId, name, parsed.color]);
 }
-async function goalExists(id) { const row = await get(`SELECT 1 FROM goals WHERE id = ?`, [id]); return !!row; }
+async function goalExists(userId, id) { 
+  const row = await get(`SELECT 1 FROM goals WHERE user_id = ? AND id = ?`, [userId, id]); 
+  return !!row; 
+}
 
-// ----------------------
-// Schema + Migrações simples
-// ----------------------
+// ================ SCHEMA + MIGRAÇÕES ================
+
+// Cria tabela users (simples). Seu ./auth pode gerenciar senhas/tokens à parte.
+async function ensureUsersTable() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      name TEXT,
+      password_hash TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
+}
+
+// Garante/obtém usuário padrão para migrar dados legados.
+async function ensureDefaultUser() {
+  const email = process.env.DEV_DEFAULT_USER_EMAIL || 'default@local';
+  // Se já existir, só retorna
+  let u = await get(`SELECT id FROM users WHERE email = ?`, [email]);
+  if (!u) {
+    // Compatibilidade com esquemas que exigem password_hash NOT NULL
+    await run(
+      `INSERT INTO users (email, name, password_hash) VALUES (?, ?, '')`,
+      [email, 'Default']
+    );
+    u = await get(`SELECT id FROM users WHERE email = ?`, [email]);
+  }
+  return u.id;
+}
+
 async function addColumnIfMissing(table, column, definition) {
+  if (!(await tableExists(table))) return; // se a tabela nem existe, deixa o ensureSchemaFresh criar
   const cols = await all(`PRAGMA table_info(${table})`);
   const has = Array.isArray(cols) && cols.some(c => c.name === column);
-  if (!has) { try { await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);} catch(_){} }
+  if (!has) {
+    try {
+      await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    } catch (_) {}
+  }
+}
+async function tableHasColumn(table, column) {
+  const cols = await all(`PRAGMA table_info(${table})`);
+  return Array.isArray(cols) && cols.some(c => c.name === column);
 }
 
-async function ensureMigrations() {
+// Rebuild de categories quando não tem user_id (remove UNIQUE global de name)
+async function migrateCategoriesToMultiUser(defaultUserId) {
+  const exists = await tableExists('categories');
+  if (!exists) return; // banco zerado: categories será criada no ensureSchemaFresh
+
+  const hasUserId = await tableHasColumn('categories', 'user_id');
+  if (hasUserId) {
+    await run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_categories_user_name ON categories(user_id, name)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_categories_user ON categories(user_id)`);
+    return;
+  }
+
+  await run('BEGIN');
+  try {
+    await run(`ALTER TABLE categories RENAME TO categories_old`);
+
+    await run(`
+      CREATE TABLE categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL DEFAULT '#22c55e',
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    await run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_categories_user_name ON categories(user_id, name)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_categories_user ON categories(user_id)`);
+
+    await run(
+      `INSERT INTO categories (id, user_id, name, color)
+       SELECT id, ?, name, color FROM categories_old`,
+      [defaultUserId]
+    );
+
+    await run(`DROP TABLE categories_old`);
+    await run('COMMIT');
+  } catch (e) {
+    await run('ROLLBACK');
+    throw e;
+  }
+}
+
+
+// Migrações gerais para colunas user_id nas demais tabelas
+async function migrateAddUserId(defaultUserId) {
+  // transactions
+  await addColumnIfMissing('transactions', 'user_id', 'INTEGER');
+  await run(`UPDATE transactions SET user_id = COALESCE(user_id, ?) WHERE user_id IS NULL`, [defaultUserId]);
+  await run(`CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, date, id)`);
+
+  // recurrences
+  await addColumnIfMissing('recurrences', 'user_id', 'INTEGER');
+  await run(`UPDATE recurrences SET user_id = COALESCE(user_id, ?) WHERE user_id IS NULL`, [defaultUserId]);
+  await run(`CREATE INDEX IF NOT EXISTS idx_recur_user_next ON recurrences(user_id, next_run, active)`);
   await addColumnIfMissing('recurrences', 'goal_id', 'INTEGER');
+
+  // goals
+  await addColumnIfMissing('goals', 'user_id', 'INTEGER');
+  await run(`UPDATE goals SET user_id = COALESCE(user_id, ?) WHERE user_id IS NULL`, [defaultUserId]);
+  await run(`CREATE INDEX IF NOT EXISTS idx_goals_user_status ON goals(user_id, status)`);
+
+  // goal_contributions
+  await addColumnIfMissing('goal_contributions', 'user_id', 'INTEGER');
+  await run(`UPDATE goal_contributions SET user_id = COALESCE(user_id, ?) WHERE user_id IS NULL`, [defaultUserId]);
+  await run(`CREATE INDEX IF NOT EXISTS idx_goal_contrib_user_goal_date ON goal_contributions(user_id, goal_id, date)`);
 }
 
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL,
-    description TEXT NOT NULL,
-    category TEXT NOT NULL,
-    type TEXT CHECK (type IN ('income','expense')) NOT NULL,
-    amount REAL NOT NULL
-  )`);
+// Criação "fresh" do schema (caso DB novo)
+async function ensureSchemaFresh() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      name TEXT,
+      password_hash TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS categories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL,
-    color TEXT NOT NULL DEFAULT '#22c55e'
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_categories_name ON categories(name)`);
+  await run(`
+    CREATE TABLE IF NOT EXISTS transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL,
+      type TEXT CHECK (type IN ('income','expense')) NOT NULL,
+      amount REAL NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, date, id)`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS recurrences (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    description TEXT NOT NULL,
-    category TEXT NOT NULL,
-    type TEXT CHECK (type IN ('income','expense')) NOT NULL,
-    amount REAL NOT NULL,
-    frequency TEXT CHECK (frequency IN ('daily','weekly','monthly')) NOT NULL,
-    interval INTEGER NOT NULL DEFAULT 1,
-    start_date TEXT NOT NULL,
-    end_date TEXT,
-    next_run TEXT NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1
-    -- goal_id será adicionado por migração
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_recur_next ON recurrences(next_run, active)`);
+  await run(`
+    CREATE TABLE IF NOT EXISTS categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT '#22c55e',
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_categories_user_name ON categories(user_id, name)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_categories_user ON categories(user_id)`);
 
-  // --------- Metas ---------
-  db.run(`CREATE TABLE IF NOT EXISTS goals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    target_amount REAL NOT NULL,
-    color TEXT NOT NULL DEFAULT '#22c55e',
-    start_date TEXT NOT NULL,
-    target_date TEXT,
-    status TEXT CHECK (status IN ('active','paused','achieved','archived')) NOT NULL DEFAULT 'active',
-    notes TEXT
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status)`);
+  await run(`
+    CREATE TABLE IF NOT EXISTS recurrences (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL,
+      type TEXT CHECK (type IN ('income','expense')) NOT NULL,
+      amount REAL NOT NULL,
+      frequency TEXT CHECK (frequency IN ('daily','weekly','monthly')) NOT NULL,
+      interval INTEGER NOT NULL DEFAULT 1,
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      next_run TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      goal_id INTEGER,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_recur_user_next ON recurrences(user_id, next_run, active)`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS goal_contributions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    goal_id INTEGER NOT NULL,
-    date TEXT NOT NULL,
-    amount REAL NOT NULL,   -- +depósito / -retirada
-    transaction_id INTEGER, -- id em transactions (opcional)
-    source TEXT CHECK (source IN ('manual','transaction','recurrence')) DEFAULT 'manual',
-    notes TEXT,
-    FOREIGN KEY (goal_id) REFERENCES goals(id)
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_goal_contrib_goal_date ON goal_contributions(goal_id, date)`);
-});
+  await run(`
+    CREATE TABLE IF NOT EXISTS goals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      target_amount REAL NOT NULL,
+      color TEXT NOT NULL DEFAULT '#22c55e',
+      start_date TEXT NOT NULL,
+      target_date TEXT,
+      status TEXT CHECK (status IN ('active','paused','achieved','archived')) NOT NULL DEFAULT 'active',
+      notes TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_goals_user_status ON goals(user_id, status)`);
 
-// dispara migração simples (não bloqueante)
-ensureMigrations().catch(()=>{});
+  await run(`
+    CREATE TABLE IF NOT EXISTS goal_contributions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      goal_id INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      amount REAL NOT NULL,
+      transaction_id INTEGER,
+      source TEXT CHECK (source IN ('manual','transaction','recurrence')) DEFAULT 'manual',
+      notes TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_goal_contrib_user_goal_date ON goal_contributions(user_id, goal_id, date)`);
+}
 
-// ping
+// Orquestra migrações (suporta bancos antigos)
+async function ensureMigrations() {
+  await ensureUsersTable();
+  const defaultUserId = await ensureDefaultUser();
+
+  // Detecta se já existem tabelas antigas (parcialmente ou todas)
+  const hasAnyLegacy =
+    (await tableExists('categories')) ||
+    (await tableExists('transactions')) ||
+    (await tableExists('recurrences')) ||
+    (await tableExists('goals')) ||
+    (await tableExists('goal_contributions'));
+
+  if (!hasAnyLegacy) {
+    // Banco novo: cria tudo já no formato multiusuário
+    await ensureSchemaFresh();
+    return;
+  }
+
+  // Banco antigo: 1) migra categories  2) adiciona user_id nas demais  3) garante schema/índices
+  await migrateCategoriesToMultiUser(defaultUserId);
+  await migrateAddUserId(defaultUserId);
+  await ensureSchemaFresh(); // agora é seguro criar índices que usam user_id
+}
+
+
+// dispara migração não bloqueante
+ensureMigrations().catch((e) => console.error('Falha em migrações:', e));
+
+// ================ PING ================
 app.get('/', (_req, res) => res.send('API OK'));
 
-// ----------------------
-// Categorias (CRUD)
-// ----------------------
-app.get('/api/categories', async (_req, res) => {
+// ================ MIDDLEWARE DE ROTAS PROTEGIDAS ================
+app.use('/api', app.authRequired, (req, _res, next) => {
+  req.authUserId = req.user.id;
+  next();
+});
+
+// ================ CATEGORIAS (CRUD) ================
+app.get('/api/categories', async (req, res) => {
   try {
-    const rows = await all(`SELECT id, name, color FROM categories ORDER BY name ASC`);
+    const uid = req.authUserId;
+    const rows = await all(
+      `SELECT id, name, color FROM categories WHERE user_id = ? ORDER BY name ASC`,
+      [uid]
+    );
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/categories', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const { name, color } = req.body || {};
     const clean = String(name || '').trim();
     if (!clean) return res.status(400).json({ error: 'Nome é obrigatório.' });
     const parsed = parseColor(color, clean);
     if (!parsed.ok) return res.status(400).json({ error: parsed.error });
 
-    await run(`INSERT INTO categories (name, color) VALUES (?, ?)`, [clean, parsed.color]);
-    const row = await get(`SELECT id, name, color FROM categories WHERE name = ?`, [clean]);
+    await run(`INSERT INTO categories (user_id, name, color) VALUES (?, ?, ?)`, [uid, clean, parsed.color]);
+    const row = await get(`SELECT id, name, color FROM categories WHERE user_id = ? AND name = ?`, [uid, clean]);
     res.status(201).json(row);
   } catch (e) {
     if (String(e.message || '').includes('UNIQUE')) return res.status(409).json({ error: 'Já existe uma categoria com esse nome.' });
@@ -215,9 +430,10 @@ app.post('/api/categories', async (req, res) => {
 
 app.patch('/api/categories/:id', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
-    const current = await get(`SELECT id, name, color FROM categories WHERE id = ?`, [id]);
+    const current = await get(`SELECT id, name, color FROM categories WHERE user_id = ? AND id = ?`, [uid, id]);
     if (!current) return res.status(404).json({ error: 'Categoria não encontrada.' });
 
     const nextName = req.body?.name !== undefined ? String(req.body.name).trim() : undefined;
@@ -233,15 +449,15 @@ app.patch('/api/categories/:id', async (req, res) => {
     if (nextColor !== undefined) { set.push('color = ?'); params.push(nextColor); }
     if (!set.length) return res.status(400).json({ error: 'Nada para atualizar.' });
 
-    params.push(id);
-    await run(`UPDATE categories SET ${set.join(', ')} WHERE id = ?`, params);
+    params.push(uid, id);
+    await run(`UPDATE categories SET ${set.join(', ')} WHERE user_id = ? AND id = ?`, params);
 
     if (nextName !== undefined && nextName !== current.name) {
-      await run(`UPDATE transactions SET category = ? WHERE category = ?`, [nextName, current.name]);
-      await run(`UPDATE recurrences SET category = ? WHERE category = ?`, [nextName, current.name]);
+      await run(`UPDATE transactions SET category = ? WHERE user_id = ? AND category = ?`, [nextName, uid, current.name]);
+      await run(`UPDATE recurrences SET category = ? WHERE user_id = ? AND category = ?`, [nextName, uid, current.name]);
     }
 
-    const row = await get(`SELECT id, name, color FROM categories WHERE id = ?`, [id]);
+    const row = await get(`SELECT id, name, color FROM categories WHERE user_id = ? AND id = ?`, [uid, id]);
     res.json(row);
   } catch (e) {
     if (String(e.message || '').includes('UNIQUE')) return res.status(409).json({ error: 'Já existe uma categoria com esse nome.' });
@@ -251,34 +467,35 @@ app.patch('/api/categories/:id', async (req, res) => {
 
 app.delete('/api/categories/:id', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
 
-    const cat = await get(`SELECT id, name FROM categories WHERE id = ?`, [id]);
+    const cat = await get(`SELECT id, name FROM categories WHERE user_id = ? AND id = ?`, [uid, id]);
     if (!cat) return res.status(404).json({ error: 'Categoria não encontrada.' });
 
-    const refTx = await get(`SELECT COUNT(1) AS n FROM transactions WHERE category = ?`, [cat.name]);
+    const refTx = await get(`SELECT COUNT(1) AS n FROM transactions WHERE user_id = ? AND category = ?`, [uid, cat.name]);
     if ((refTx?.n || 0) > 0) {
       return res.status(409).json({ error: 'Existem transações vinculadas a esta categoria. Atualize/remova-as antes de excluir.' });
     }
-
-    const refRec = await get(`SELECT COUNT(1) AS n FROM recurrences WHERE category = ?`, [cat.name]);
+    const refRec = await get(`SELECT COUNT(1) AS n FROM recurrences WHERE user_id = ? AND category = ?`, [uid, cat.name]);
     if ((refRec?.n || 0) > 0) {
       return res.status(409).json({ error: 'Existem recorrências usando esta categoria. Atualize/exclua as recorrências antes de excluir a categoria.' });
     }
 
-    await run(`DELETE FROM categories WHERE id = ?`, [id]);
+    await run(`DELETE FROM categories WHERE user_id = ? AND id = ?`, [uid, id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ----------------------
-// Transações
-// ----------------------
+// ================ TRANSAÇÕES ================
 app.get('/api/transactions', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const { from, to, category, type } = req.query;
-    const where = [], params = [];
+    const where = ['t.user_id = ?'];
+    const params = [uid];
+
     if (from) { where.push('t.date >= ?'); params.push(from); }
     if (to)   { where.push('t.date <= ?'); params.push(to); }
     if (category) { where.push('t.category = ?'); params.push(category); }
@@ -287,7 +504,7 @@ app.get('/api/transactions', async (req, res) => {
     const sql = `
       SELECT t.*, COALESCE(c.color, '#64748b') AS category_color
       FROM transactions t
-      LEFT JOIN categories c ON c.name = t.category
+      LEFT JOIN categories c ON c.user_id = t.user_id AND c.name = t.category
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ORDER BY t.date DESC, t.id DESC
     `;
@@ -298,6 +515,7 @@ app.get('/api/transactions', async (req, res) => {
 
 app.post('/api/transactions', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const { date, description, category, type, amount, goal_id } = req.body || {};
     const amt = typeof amount === 'number' ? amount : parseFloat(String(amount).replace(',', '.'));
     if (!date || !description || !category || !type || !Number.isFinite(amt)) {
@@ -306,75 +524,81 @@ app.post('/api/transactions', async (req, res) => {
     if (!['income', 'expense'].includes(type)) {
       return res.status(400).json({ error: "type deve ser 'income' ou 'expense'." });
     }
-    const ok = await existsCategory(category);
+    const ok = await existsCategory(uid, category);
     if (!ok) return res.status(400).json({ error: 'Categoria inexistente. Escolha uma categoria válida.' });
 
     let gid = null;
     if (goal_id !== undefined && goal_id !== null && goal_id !== '') {
       const id = Number(goal_id);
       if (!Number.isInteger(id)) return res.status(400).json({ error: 'goal_id inválido.' });
-      const gOk = await goalExists(id);
+      const gOk = await goalExists(uid, id);
       if (!gOk) return res.status(404).json({ error: 'Meta não encontrada.' });
       gid = id;
     }
 
     const stmt = await run(
-      `INSERT INTO transactions (date, description, category, type, amount) VALUES (?, ?, ?, ?, ?)`,
-      [date, String(description).trim(), String(category).trim(), type, amt]
+      `INSERT INTO transactions (user_id, date, description, category, type, amount) VALUES (?, ?, ?, ?, ?, ?)`,
+      [uid, date, String(description).trim(), String(category).trim(), type, amt]
     );
 
     if (gid) {
       const signed = type === 'expense' ? Math.abs(amt) : -Math.abs(amt);
       await run(
-        `INSERT INTO goal_contributions (goal_id, date, amount, transaction_id, source)
-         VALUES (?, ?, ?, ?, 'transaction')`,
-        [gid, date, signed, stmt.lastID]
+        `INSERT INTO goal_contributions (user_id, goal_id, date, amount, transaction_id, source)
+         VALUES (?, ?, ?, ?, ?, 'transaction')`,
+        [uid, gid, date, signed, stmt.lastID]
       );
     }
 
-    const row = await get(`SELECT * FROM transactions WHERE id = ?`, [stmt.lastID]);
+    const row = await get(`SELECT * FROM transactions WHERE user_id = ? AND id = ?`, [uid, stmt.lastID]);
     res.status(201).json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete('/api/transactions/:id', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return res.status(400).json({ error: 'id inválido' });
-    await run(`DELETE FROM transactions WHERE id = ?`, [id]);
+    const r = await run(`DELETE FROM transactions WHERE user_id = ? AND id = ?`, [uid, id]);
+    if ((r?.changes || 0) === 0) return res.status(404).json({ error: 'Transação não encontrada.' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ----------------------
-// Resumo
-// ----------------------
+// ================ RESUMO ================
 app.get('/api/summary', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const { from, to } = req.query;
-    const where = [], params = [];
+    const where = ['t.user_id = ?'];
+    const params = [uid];
     if (from) { where.push('t.date >= ?'); params.push(from); }
     if (to)   { where.push('t.date <= ?'); params.push(to); }
 
     const totals = await get(
-      `SELECT 
+      `
+      SELECT 
         SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as income,
         SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) as expense
        FROM transactions t
-       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`,
+       WHERE ${where.join(' AND ')}
+      `,
       params
     );
 
     const byCategory = await all(
-      `SELECT t.category AS category,
-              SUM(CASE WHEN t.type='income' THEN t.amount ELSE 0 END) as income,
-              SUM(CASE WHEN t.type='expense' THEN t.amount ELSE 0 END) as expense,
-              COALESCE(c.color, '#64748b') as color
+      `
+      SELECT t.category AS category,
+             SUM(CASE WHEN t.type='income' THEN t.amount ELSE 0 END) as income,
+             SUM(CASE WHEN t.type='expense' THEN t.amount ELSE 0 END) as expense,
+             COALESCE(c.color, '#64748b') as color
        FROM transactions t
-       LEFT JOIN categories c ON c.name = t.category
-       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+       LEFT JOIN categories c ON c.user_id = t.user_id AND c.name = t.category
+       WHERE ${where.join(' AND ')}
        GROUP BY t.category
-       ORDER BY (income - expense) DESC`,
+       ORDER BY (income - expense) DESC
+      `,
       params
     );
 
@@ -387,20 +611,23 @@ app.get('/api/summary', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ----------------------
-// Recorrências (CRUD + processor)
-// ----------------------
+// ================ RECORRÊNCIAS (CRUD + PROCESSADOR) ================
 const VALID_FREQ = new Set(['daily','weekly','monthly']);
 
-app.get('/api/recurrences', async (_req, res) => {
+app.get('/api/recurrences', async (req, res) => {
   try {
-    const rows = await all(`SELECT * FROM recurrences ORDER BY active DESC, next_run ASC, id ASC`);
+    const uid = req.authUserId;
+    const rows = await all(
+      `SELECT * FROM recurrences WHERE user_id = ? ORDER BY active DESC, next_run ASC, id ASC`,
+      [uid]
+    );
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/recurrences', async (req, res) => {
   try {
+    const uid = req.authUserId;
     let { description, category, type, amount, frequency, interval, start_date, end_date, active, goal_id } = req.body || {};
     const amt = typeof amount === 'number' ? amount : parseFloat(String(amount).replace(',', '.'));
     description = String(description || '').trim();
@@ -416,11 +643,10 @@ app.post('/api/recurrences', async (req, res) => {
     if (goal_id !== undefined && goal_id !== null && goal_id !== '') {
       const id = Number(goal_id);
       if (!Number.isInteger(id)) return res.status(400).json({ error: 'goal_id inválido.' });
-      const gOk = await goalExists(id);
+      const gOk = await goalExists(uid, id);
       if (!gOk) return res.status(404).json({ error: 'Meta não encontrada.' });
       gid = id;
-      // boa prática: garantir categoria "Metas" caso queira usá-la
-      if (category.toLowerCase() === 'metas') await ensureCategory('Metas');
+      if (category.toLowerCase() === 'metas') await ensureCategory(uid, 'Metas');
     }
 
     if (!description || !category || !type || !Number.isFinite(amt) || !start_date || !VALID_FREQ.has(frequency)) {
@@ -431,21 +657,22 @@ app.post('/api/recurrences', async (req, res) => {
 
     const next_run = computeInitialNextRun(start_date, frequency, interval, end_date);
     const stmt = await run(
-      `INSERT INTO recurrences (description, category, type, amount, frequency, interval, start_date, end_date, next_run, active, goal_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-      [description, category, type, amt, frequency, interval, start_date, end_date, next_run, active, gid]
+      `INSERT INTO recurrences (user_id, description, category, type, amount, frequency, interval, start_date, end_date, next_run, active, goal_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [uid, description, category, type, amt, frequency, interval, start_date, end_date, next_run, active, gid]
     );
-    const row = await get(`SELECT * FROM recurrences WHERE id = ?`, [stmt.lastID]);
+    const row = await get(`SELECT * FROM recurrences WHERE user_id = ? AND id = ?`, [uid, stmt.lastID]);
     res.status(201).json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.patch('/api/recurrences/:id', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
 
-    const current = await get(`SELECT * FROM recurrences WHERE id = ?`, [id]);
+    const current = await get(`SELECT * FROM recurrences WHERE user_id = ? AND id = ?`, [uid, id]);
     if (!current) return res.status(404).json({ error: 'Recorrência não encontrada.' });
 
     const fields = {};
@@ -457,7 +684,7 @@ app.patch('/api/recurrences/:id', async (req, res) => {
     }
     if (req.body.category !== undefined) {
       fields.category = String(req.body.category).trim();
-      if (fields.category.toLowerCase() === 'metas') await ensureCategory('Metas');
+      if (fields.category.toLowerCase() === 'metas') await ensureCategory(uid, 'Metas');
     }
     if (req.body.type !== undefined) {
       fields.type = String(req.body.type).trim();
@@ -492,7 +719,7 @@ app.patch('/api/recurrences/:id', async (req, res) => {
       } else {
         const gid = Number(req.body.goal_id);
         if (!Number.isInteger(gid)) return res.status(400).json({ error: 'goal_id inválido.' });
-        const gOk = await goalExists(gid);
+        const gOk = await goalExists(uid, gid);
         if (!gOk) return res.status(404).json({ error: 'Meta não encontrada.' });
         fields.goal_id = gid;
       }
@@ -500,7 +727,7 @@ app.patch('/api/recurrences/:id', async (req, res) => {
 
     for (const [k,v] of Object.entries(fields)) { set.push(`${k} = ?`); params.push(v); }
 
-    const nextDependencies = ['frequency','interval','start_date'];
+    const nextDependencies = ['frequency','interval','start_date','end_date'];
     if (nextDependencies.some(k => fields[k] !== undefined)) {
       const freq = fields.frequency ?? current.frequency;
       const intv = fields.interval ?? current.interval;
@@ -510,26 +737,29 @@ app.patch('/api/recurrences/:id', async (req, res) => {
     }
 
     if (!set.length) return res.status(400).json({ error: 'Nada para atualizar.' });
-    params.push(id);
-    await run(`UPDATE recurrences SET ${set.join(', ')} WHERE id = ?`, params);
-    const row = await get(`SELECT * FROM recurrences WHERE id = ?`, [id]);
+    params.push(uid, id);
+    await run(`UPDATE recurrences SET ${set.join(', ')} WHERE user_id = ? AND id = ?`, params);
+    const row = await get(`SELECT * FROM recurrences WHERE user_id = ? AND id = ?`, [uid, id]);
     res.json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete('/api/recurrences/:id', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
-    await run(`DELETE FROM recurrences WHERE id = ?`, [id]);
+    const r = await run(`DELETE FROM recurrences WHERE user_id = ? AND id = ?`, [uid, id]);
+    if ((r?.changes || 0) === 0) return res.status(404).json({ error: 'Recorrência não encontrada.' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// roda processador manualmente (todas)
-app.post('/api/recurrences/run', async (_req, res) => {
+// roda processador manualmente (todas as recorrências DO USUÁRIO)
+app.post('/api/recurrences/run', async (req, res) => {
   try {
-    const count = await processRecurrences();
+    const uid = req.authUserId;
+    const count = await processRecurrences(null, uid);
     res.json({ ok: true, generated: count });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -537,54 +767,55 @@ app.post('/api/recurrences/run', async (_req, res) => {
 // roda processador para uma recorrência (suporta force=1 para "Lançar hoje" + dedupe)
 app.post('/api/recurrences/:id/run', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
     const force = String(req.query.force || '').toLowerCase();
     const doForce = force === '1' || force === 'true';
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
 
-    const r = await get(`SELECT * FROM recurrences WHERE id = ?`, [id]);
+    const r = await get(`SELECT * FROM recurrences WHERE user_id = ? AND id = ?`, [uid, id]);
     if (!r) return res.status(404).json({ error: 'Recorrência não encontrada.' });
     if (r.active !== 1) return res.status(409).json({ error: 'Recorrência pausada.' });
 
     const today = todayLocalISO();
 
-    // se está vencida ou igual a hoje, delega pro processador normal
+    // se está vencida ou igual a hoje, delega pro processador normal (escopo do usuário)
     if (!doForce || r.next_run <= today) {
-      const count = await processRecurrences(id);
+      const count = await processRecurrences(id, uid);
       return res.json({ ok: true, generated: count });
     }
 
-    // Forçar HOJE com dedupe
+    // Forçar HOJE com dedupe por usuário
     const exists = await get(
       `SELECT 1 FROM transactions 
-       WHERE date=? AND description=? AND category=? AND type=? AND amount=? LIMIT 1`,
-      [today, r.description, r.category, r.type, r.amount]
+       WHERE user_id = ? AND date=? AND description=? AND category=? AND type=? AND amount=? LIMIT 1`,
+      [uid, today, r.description, r.category, r.type, r.amount]
     );
     if (exists) {
       const next = advance(today, r.frequency, r.interval);
-      await run(`UPDATE recurrences SET next_run = ? WHERE id = ?`, [next, r.id]);
+      await run(`UPDATE recurrences SET next_run = ? WHERE user_id = ? AND id = ?`, [next, uid, r.id]);
       return res.json({ ok: true, generated: 0, deduped: true });
     }
 
     // cria transação
     const ins = await run(
-      `INSERT INTO transactions (date, description, category, type, amount)
-       VALUES (?, ?, ?, ?, ?)`,
-      [today, r.description, r.category, r.type, r.amount]
+      `INSERT INTO transactions (user_id, date, description, category, type, amount)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [uid, today, r.description, r.category, r.type, r.amount]
     );
 
     // se estiver vinculada a meta, cria contribuição
     if (r.goal_id) {
       const signed = r.type === 'expense' ? Math.abs(r.amount) : -Math.abs(r.amount);
       await run(
-        `INSERT INTO goal_contributions (goal_id, date, amount, transaction_id, source)
-         VALUES (?, ?, ?, ?, 'recurrence')`,
-        [r.goal_id, today, signed, ins.lastID]
+        `INSERT INTO goal_contributions (user_id, goal_id, date, amount, transaction_id, source)
+         VALUES (?, ?, ?, ?, ?, 'recurrence')`,
+        [uid, r.goal_id, today, signed, ins.lastID]
       );
     }
 
     const next = advance(today, r.frequency, r.interval);
-    await run(`UPDATE recurrences SET next_run = ? WHERE id = ?`, [next, r.id]);
+    await run(`UPDATE recurrences SET next_run = ? WHERE user_id = ? AND id = ?`, [next, uid, r.id]);
 
     return res.json({ ok: true, generated: 1 });
   } catch (e) {
@@ -592,18 +823,19 @@ app.post('/api/recurrences/:id/run', async (req, res) => {
   }
 });
 
-// ----------------------
-// Processador de recorrências
-// ----------------------
-async function processRecurrences(onlyId = null) {
+// ================ PROCESSADOR DE RECORRÊNCIAS ================
+async function processRecurrences(onlyId = null, onlyUserId = null) {
   const today = todayLocalISO();
+  const where = [`active = 1`, `next_run <= ?`];
+  const params = [today];
+  if (onlyId) { where.push(`id = ?`); params.push(onlyId); }
+  if (onlyUserId) { where.push(`user_id = ?`); params.push(onlyUserId); }
+
   const rows = await all(
     `SELECT * FROM recurrences
-     WHERE active = 1
-       AND next_run <= ?
-       ${onlyId ? 'AND id = ?' : ''}
+     WHERE ${where.join(' AND ')}
      ORDER BY next_run ASC, id ASC`,
-    onlyId ? [today, onlyId] : [today]
+    params
   );
 
   let generated = 0;
@@ -613,18 +845,17 @@ async function processRecurrences(onlyId = null) {
     const limit = r.end_date || '9999-12-31';
     while (next <= today && next <= limit && safety++ < 100) {
       const ins = await run(
-        `INSERT INTO transactions (date, description, category, type, amount)
-         VALUES (?, ?, ?, ?, ?)`,
-
-        [next, r.description, r.category, r.type, r.amount]
+        `INSERT INTO transactions (user_id, date, description, category, type, amount)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [r.user_id, next, r.description, r.category, r.type, r.amount]
       );
       // contribuição automática se tiver goal_id
       if (r.goal_id) {
         const signed = r.type === 'expense' ? Math.abs(r.amount) : -Math.abs(r.amount);
         await run(
-          `INSERT INTO goal_contributions (goal_id, date, amount, transaction_id, source)
-           VALUES (?, ?, ?, ?, 'recurrence')`,
-          [r.goal_id, next, signed, ins.lastID]
+          `INSERT INTO goal_contributions (user_id, goal_id, date, amount, transaction_id, source)
+           VALUES (?, ?, ?, ?, ?, 'recurrence')`,
+          [r.user_id, r.goal_id, next, signed, ins.lastID]
         );
       }
       generated++;
@@ -637,15 +868,12 @@ async function processRecurrences(onlyId = null) {
   return generated;
 }
 
-// agenda a cada 60s
+// agenda a cada 60s para rodar GLOBALMENTE (todos os usuários)
 setInterval(() => { processRecurrences().catch(() => {}); }, 60 * 1000);
-
 // roda na inicialização
 processRecurrences().catch(() => {});
 
-// ----------------------
-// Metas (Goals)
-// ----------------------
+// ================ METAS (GOALS) ================
 function monthsBetween(startISO, endISO) {
   const a = new Date(startISO + 'T00:00:00');
   const b = new Date(endISO + 'T00:00:00');
@@ -655,18 +883,23 @@ function monthsBetween(startISO, endISO) {
 }
 
 // Lista metas com campos calculados
-app.get('/api/goals', async (_req, res) => {
+app.get('/api/goals', async (req, res) => {
   try {
-    const rows = await all(`
+    const uid = req.authUserId;
+    const rows = await all(
+      `
       SELECT g.*,
              COALESCE(SUM(gc.amount), 0) AS saved
       FROM goals g
-      LEFT JOIN goal_contributions gc ON gc.goal_id = g.id
+      LEFT JOIN goal_contributions gc ON gc.user_id = g.user_id AND gc.goal_id = g.id
+      WHERE g.user_id = ?
       GROUP BY g.id
       ORDER BY 
         CASE g.status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'achieved' THEN 2 ELSE 3 END,
         g.id ASC
-    `);
+      `,
+      [uid]
+    );
 
     const today = todayLocalISO();
     const enriched = rows.map((g) => {
@@ -684,14 +917,13 @@ app.get('/api/goals', async (_req, res) => {
     });
 
     res.json(enriched);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Criar meta
 app.post('/api/goals', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const { name, target_amount, color, target_date, notes } = req.body || {};
     const clean = String(name || '').trim();
     const amt = typeof target_amount === 'number' ? target_amount : parseFloat(String(target_amount).replace(',', '.'));
@@ -705,23 +937,22 @@ app.post('/api/goals', async (req, res) => {
     const tdate = target_date ? String(target_date).trim() : null;
 
     const stmt = await run(
-      `INSERT INTO goals (name, target_amount, color, start_date, target_date, status, notes)
-       VALUES (?, ?, ?, ?, ?, 'active', ?)`,
-      [clean, amt, parsedColor.color, start, tdate, notes || null]
+      `INSERT INTO goals (user_id, name, target_amount, color, start_date, target_date, status, notes)
+       VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
+      [uid, clean, amt, parsedColor.color, start, tdate, notes || null]
     );
-    const row = await get(`SELECT * FROM goals WHERE id = ?`, [stmt.lastID]);
+    const row = await get(`SELECT * FROM goals WHERE user_id = ? AND id = ?`, [uid, stmt.lastID]);
     res.status(201).json(row);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Atualizar meta
 app.patch('/api/goals/:id', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
-    const current = await get(`SELECT * FROM goals WHERE id = ?`, [id]);
+    const current = await get(`SELECT * FROM goals WHERE user_id = ? AND id = ?`, [uid, id]);
     if (!current) return res.status(404).json({ error: 'Meta não encontrada.' });
 
     const set = [], params = [];
@@ -754,33 +985,34 @@ app.patch('/api/goals/:id', async (req, res) => {
     }
 
     if (!set.length) return res.status(400).json({ error: 'Nada para atualizar.' });
-    params.push(id);
-    await run(`UPDATE goals SET ${set.join(', ')} WHERE id = ?`, params);
-    const row = await get(`SELECT * FROM goals WHERE id = ?`, [id]);
+    params.push(uid, id);
+    await run(`UPDATE goals SET ${set.join(', ')} WHERE user_id = ? AND id = ?`, params);
+    const row = await get(`SELECT * FROM goals WHERE user_id = ? AND id = ?`, [uid, id]);
     res.json(row);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Excluir meta (SEMPRE em cascata: contribuições + transações ligadas)
+// Excluir meta (cascata manual: contribuições + transações ligadas)
 app.delete('/api/goals/:id', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
 
     await run('BEGIN');
     try {
-      await run(`
-        DELETE FROM transactions 
-        WHERE id IN (
-          SELECT transaction_id FROM goal_contributions 
-          WHERE goal_id = ? AND transaction_id IS NOT NULL
-        )
-      `, [id]);
+      // Somente o que é do usuário
+      await run(
+        `DELETE FROM transactions 
+         WHERE user_id = ? AND id IN (
+           SELECT transaction_id FROM goal_contributions 
+           WHERE user_id = ? AND goal_id = ? AND transaction_id IS NOT NULL
+         )`,
+        [uid, uid, id]
+      );
 
-      await run(`DELETE FROM goal_contributions WHERE goal_id = ?`, [id]);
-      const result = await run(`DELETE FROM goals WHERE id = ?`, [id]);
+      await run(`DELETE FROM goal_contributions WHERE user_id = ? AND goal_id = ?`, [uid, id]);
+      const result = await run(`DELETE FROM goals WHERE user_id = ? AND id = ?`, [uid, id]);
 
       await run('COMMIT');
       if ((result?.changes ?? 0) === 0) {
@@ -791,27 +1023,28 @@ app.delete('/api/goals/:id', async (req, res) => {
       await run('ROLLBACK');
       throw e;
     }
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Listar contribuições
 app.get('/api/goals/:id/contributions', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
-    const rows = await all(`SELECT * FROM goal_contributions WHERE goal_id = ? ORDER BY date ASC, id ASC`, [id]);
+    const rows = await all(
+      `SELECT * FROM goal_contributions WHERE user_id = ? AND goal_id = ? ORDER BY date ASC, id ASC`,
+      [uid, id]
+    );
     res.json(rows);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Criar contribuição (depósito + / retirada -) com opção de gerar transação
 app.post('/api/goals/:id/contributions', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
-    const g = await get(`SELECT * FROM goals WHERE id = ?`, [id]);
+    const g = await get(`SELECT * FROM goals WHERE user_id = ? AND id = ?`, [uid, id]);
     if (!g) return res.status(404).json({ error: 'Meta não encontrada.' });
 
     let { date, amount, createTransaction, notes } = req.body || {};
@@ -821,49 +1054,47 @@ app.post('/api/goals/:id/contributions', async (req, res) => {
 
     let txId = null;
     if (createTransaction) {
-      await ensureCategory('Metas');
+      await ensureCategory(uid, 'Metas');
       const type = amt > 0 ? 'expense' : 'income';  // depósito = saída; retirada = entrada
       const ins = await run(
-        `INSERT INTO transactions (date, description, category, type, amount)
-         VALUES (?, ?, ?, ?, ?)`,
-        [date, `Meta: ${g.name}`, 'Metas', type, Math.abs(amt)]
+        `INSERT INTO transactions (user_id, date, description, category, type, amount)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [uid, date, `Meta: ${g.name}`, 'Metas', type, Math.abs(amt)]
       );
       txId = ins.lastID || null;
     }
 
     const st = await run(
-      `INSERT INTO goal_contributions (goal_id, date, amount, transaction_id, source, notes)
-       VALUES (?, ?, ?, ?, 'manual', ?)`,
-      [id, date, amt, txId, notes || null]
+      `INSERT INTO goal_contributions (user_id, goal_id, date, amount, transaction_id, source, notes)
+       VALUES (?, ?, ?, ?, ?, 'manual', ?)`,
+      [uid, id, date, amt, txId, notes || null]
     );
 
-    const row = await get(`SELECT * FROM goal_contributions WHERE id = ?`, [st.lastID]);
+    const row = await get(`SELECT * FROM goal_contributions WHERE user_id = ? AND id = ?`, [uid, st.lastID]);
     res.status(201).json(row);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Excluir contribuição (opcionalmente apaga transação vinculada ?deleteTransaction=1)
 app.delete('/api/goals/:id/contributions/:cid', async (req, res) => {
   try {
+    const uid = req.authUserId;
     const id = Number(req.params.id);
     const cid = Number(req.params.cid);
     const delTx = String(req.query.deleteTransaction || '').toLowerCase();
     const alsoTx = delTx === '1' || delTx === 'true';
 
-    const row = await get(`SELECT * FROM goal_contributions WHERE id = ? AND goal_id = ?`, [cid, id]);
+    const row = await get(`SELECT * FROM goal_contributions WHERE user_id = ? AND id = ? AND goal_id = ?`, [uid, cid, id]);
     if (!row) return res.status(404).json({ error: 'Contribuição não encontrada.' });
 
     if (alsoTx && row.transaction_id) {
-      await run(`DELETE FROM transactions WHERE id = ?`, [row.transaction_id]);
+      await run(`DELETE FROM transactions WHERE user_id = ? AND id = ?`, [uid, row.transaction_id]);
     }
-    await run(`DELETE FROM goal_contributions WHERE id = ?`, [cid]);
+    await run(`DELETE FROM goal_contributions WHERE user_id = ? AND id = ?`, [uid, cid]);
     res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ================ START ================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`API em http://localhost:${PORT}`));

@@ -3,6 +3,12 @@ import ConfirmDialog from '../ui/ConfirmDialog';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
+// Adiciona Authorization em todas as chamadas autenticadas
+const authHeaders = () => {
+  const t = localStorage.getItem('pf_token');
+  return t ? { Authorization: `Bearer ${t}` } : {};
+};
+
 const fmtBRL = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v ?? 0);
 const toDateLabel = (iso) => (iso ? new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR') : '');
 const FREQ_OPTIONS = [
@@ -38,8 +44,8 @@ export default function RecurrencesPage() {
     setLoading(true);
     try {
       const [r, c] = await Promise.all([
-        fetch(`${API_URL}/api/recurrences`, { cache: 'no-store' }),
-        fetch(`${API_URL}/api/categories`, { cache: 'no-store' }),
+        fetch(`${API_URL}/api/recurrences`, { cache: 'no-store', headers: authHeaders() }),
+        fetch(`${API_URL}/api/categories`,  { cache: 'no-store', headers: authHeaders() }),
       ]);
       const rows = await r.json();
       const cats = await c.json();
@@ -66,7 +72,9 @@ export default function RecurrencesPage() {
       active,
     };
     const res = await fetch(`${API_URL}/api/recurrences`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body)
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) { setErr(j.error || 'Erro ao criar'); return; }
@@ -77,7 +85,9 @@ export default function RecurrencesPage() {
   async function toggleActive(r) {
     setRunningId(r.id);
     const res = await fetch(`${API_URL}/api/recurrences/${r.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !r.active })
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ active: !r.active })
     });
     setRunningId(null);
     if (res.ok) fetchAll();
@@ -86,7 +96,10 @@ export default function RecurrencesPage() {
   // Gerar pendentes (comportamento original)
   async function runPending(r) {
     setRunningId(r.id);
-    const res = await fetch(`${API_URL}/api/recurrences/${r.id}/run`, { method: 'POST' });
+    const res = await fetch(`${API_URL}/api/recurrences/${r.id}/run`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
     const j = await res.json().catch(() => ({}));
     setRunningId(null);
     if (res.ok) fetchAll(); else alert(j.error || 'Falha ao executar');
@@ -98,7 +111,10 @@ export default function RecurrencesPage() {
     const r = toRunForce;
     setRunningId(r.id);
     setToRunForce(null);
-    const res = await fetch(`${API_URL}/api/recurrences/${r.id}/run?force=1`, { method: 'POST' });
+    const res = await fetch(`${API_URL}/api/recurrences/${r.id}/run?force=1`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
     const j = await res.json().catch(() => ({}));
     setRunningId(null);
     if (res.ok) {
@@ -112,7 +128,10 @@ export default function RecurrencesPage() {
   async function deleteNow() {
     if (!toDelete) return;
     setRunningId(toDelete.id);
-    const res = await fetch(`${API_URL}/api/recurrences/${toDelete.id}`, { method: 'DELETE' });
+    const res = await fetch(`${API_URL}/api/recurrences/${toDelete.id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
     setRunningId(null);
     setToDelete(null);
     if (res.ok) fetchAll();
