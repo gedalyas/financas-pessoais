@@ -5,7 +5,7 @@ export function getToken() {
   return localStorage.getItem('pf_token') || '';
 }
 
-export async function apiFetch(path, opts={}) {
+export async function apiFetch(path, opts = {}) {
   const token = getToken();
   const res = await fetch(`${API_URL}${path}`, {
     ...opts,
@@ -15,11 +15,15 @@ export async function apiFetch(path, opts={}) {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
   });
+
   if (res.status === 401) {
-    // opcional: auto-logout
+    // auto-logout + redirect
     localStorage.removeItem('pf_token');
     localStorage.removeItem('pf_user');
-    // window.location.href = '/auth';
+    if (!location.pathname.startsWith('/auth')) {
+      location.replace('/auth');
+    }
   }
+
   return res;
 }

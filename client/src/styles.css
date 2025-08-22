@@ -144,12 +144,44 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1) opacit
 }
 .sidebar-brand { font-weight: 800; font-size: 18px; margin-bottom: 16px; }
 .nav { display: flex; flex-direction: column; gap: 6px; }
+
+/* Itens da navegação (anchor e button compartilham a mesma classe) */
 .nav-item {
-  padding: 10px 12px; border-radius: 10px; text-decoration: none; color: var(--text);
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--text);
   border: 1px solid transparent;
+
+  /* reset para <button> não ficar cinza */
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  cursor: pointer;
 }
 .nav-item:hover { background: rgba(255,255,255,0.04); border-color: var(--panel-border); }
 .nav-item.active { background: #111827; border-color: var(--panel-border); }
+
+/* Botão Sair com destaque */
+.logout-btn {
+  margin-top: 8px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fecaca;
+}
+.logout-btn:hover {
+  background: rgba(239, 68, 68, 0.20);
+  border-color: rgba(239, 68, 68, 0.6);
+  transform: translateY(-1px);
+}
+.logout-btn:active {
+  transform: translateY(0);
+}
+
 .sidebar-footer { margin-top: auto; color: var(--muted); font-size: 12px; }
 .app-content { padding: 24px; }
 
@@ -330,5 +362,3 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1) opacit
 @media (max-width: 900px) {
   .sidebar .sidebar-brand { padding-left: 56px; }
 }
-
-

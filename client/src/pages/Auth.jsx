@@ -81,8 +81,18 @@ export default function AuthPage() {
         </div>
 
         <div className="auth-tabs" role="tablist">
-          <button className={'auth-tab' + (tab === 'login' ? ' is-active' : '')} onClick={() => setTab('login')}>Entrar</button>
-          <button className={'auth-tab' + (tab === 'register' ? ' is-active' : '')} onClick={() => setTab('register')}>Criar conta</button>
+          <button
+            className={'auth-tab' + (tab === 'login' ? ' is-active' : '')}
+            onClick={() => { setTab('login'); setErr(''); }}
+          >
+            Entrar
+          </button>
+          <button
+            className={'auth-tab' + (tab === 'register' ? ' is-active' : '')}
+            onClick={() => { setTab('register'); setErr(''); }}
+          >
+            Criar conta
+          </button>
         </div>
 
         {tab === 'login' ? (
@@ -106,7 +116,6 @@ export default function AuthPage() {
 
             <div className="auth-minor" style={{display:'flex', justifyContent:'space-between', marginTop:8}}>
               <Link to="#" onClick={(e)=>{e.preventDefault(); setFpOpen(true); setFpEmail(email);}}>Esqueci minha senha</Link>
-              <Link to="/" onClick={(e)=>{e.preventDefault(); localStorage.clear();}}>Continuar sem login</Link>
             </div>
 
             {fpOpen && (
