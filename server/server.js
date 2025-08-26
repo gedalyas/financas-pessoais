@@ -50,6 +50,22 @@ const COLOR_NAMES_PT = {
   'branco': '#e5e7eb'
 };
 
+// 🔹 Categorias padrão para novos usuários (só na 1ª vez)
+const DEFAULT_CATEGORIES = [
+  'Alimentação',
+  'Transporte',
+  'Moradia',
+  'Lazer',
+  'Saúde',
+  'Educação',
+  'Roupas',
+  'Serviços',
+  'Impostos',
+  'Investimentos',
+  'Salário',
+  'Outros'
+];
+
 function normalizeStr(s) {
   return String(s || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -100,6 +116,22 @@ function computeInitialNextRun(start_date, freq, interval, end_date) {
   }
   if (end_date && next > end_date) next = end_date;
   return next;
+}
+const LIMIT_DURATIONS = {
+  '1d': { type: 'days',   n: 1,  label: '1 dia' },
+  '1w': { type: 'days',   n: 7,  label: '1 semana' },
+  '2w': { type: 'days',   n: 14, label: '2 semanas' },
+  '1m': { type: 'months', n: 1,  label: '1 mês' },
+  '2m': { type: 'months', n: 2,  label: '2 meses' },
+  '4m': { type: 'months', n: 4,  label: '4 meses' },
+  '6m': { type: 'months', n: 6,  label: '6 meses' },
+  '1y': { type: 'months', n: 12, label: '1 ano' },
+};
+function computeLimitEnd(startISO, durationCode) {
+  const d = LIMIT_DURATIONS[durationCode];
+  if (!d) return startISO;
+  if (d.type === 'days')   return addDays(startISO, d.n - 1);   // inclusivo
+  if (d.type === 'months') return addMonthsClamp(startISO, d.n) && addDays(addMonthsClamp(startISO, d.n), -1);
 }
 
 // ================ HELPERS DB ================
@@ -153,6 +185,29 @@ async function ensureCategory(userId, name) {
 async function goalExists(userId, id) { 
   const row = await get(`SELECT 1 FROM goals WHERE user_id = ? AND id = ?`, [userId, id]); 
   return !!row; 
+}
+
+// 🔹 Cria categorias padrão na 1ª visita de cada usuário
+async function seedDefaultCategoriesForUser(userId) {
+  const countRow = await get(`SELECT COUNT(1) AS n FROM categories WHERE user_id = ?`, [userId]);
+  if ((countRow?.n || 0) > 0) return; // já tem alguma categoria
+
+  for (const name of DEFAULT_CATEGORIES) {
+    // evita duplicar (concorrência) e pega cor determinística
+    const exists = await existsCategory(userId, name);
+    if (!exists) {
+      const parsed = parseColor(undefined, name);
+      try {
+        await run(
+          `INSERT INTO categories (user_id, name, color) VALUES (?, ?, ?)`,
+          [userId, name, parsed.color]
+        );
+      } catch (e) {
+        // Em caso de corrida, índice UNIQUE (user_id,name) evita duplicar; ignore
+        if (!String(e.message || '').includes('UNIQUE')) throw e;
+      }
+    }
+  }
 }
 
 // ================ SCHEMA + MIGRAÇÕES ================
@@ -358,6 +413,24 @@ async function ensureSchemaFresh() {
     )
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_goal_contrib_user_goal_date ON goal_contributions(user_id, goal_id, date)`);
+
+    await run(`
+    CREATE TABLE IF NOT EXISTS limits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date  TEXT NOT NULL,
+      duration_code TEXT NOT NULL CHECK (duration_code IN ('1d','1w','2w','1m','2m','4m','6m','1y')),
+      max_amount REAL NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('active','paused','archived')) DEFAULT 'active',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_limits_user ON limits(user_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_limits_user_status ON limits(user_id, status)`);
+
 }
 
 // Orquestra migrações (suporta bancos antigos)
@@ -402,6 +475,10 @@ app.use('/api', app.authRequired, (req, _res, next) => {
 app.get('/api/categories', async (req, res) => {
   try {
     const uid = req.authUserId;
+
+    // 🔹 Semeia categorias padrão se o usuário ainda não tem nenhuma
+    await seedDefaultCategoriesForUser(uid);
+
     const rows = await all(
       `SELECT id, name, color FROM categories WHERE user_id = ? ORDER BY name ASC`,
       [uid]
@@ -1094,6 +1171,137 @@ app.delete('/api/goals/:id/contributions/:cid', async (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ================ LIMITS (CRUD + métricas) ================
+app.get('/api/limits', async (req, res) => {
+  try {
+    const uid = req.authUserId;
+    const rows = await all(
+      `SELECT * FROM limits WHERE user_id = ? ORDER BY status='active' DESC, start_date DESC, id DESC`,
+      [uid]
+    );
+    const today = todayLocalISO();
+
+    // calcula gasto dentro da janela para cada limite
+    const enriched = [];
+    for (const l of rows) {
+      const agg = await get(
+        `SELECT COALESCE(SUM(amount), 0) AS spent
+         FROM transactions 
+         WHERE user_id = ? AND type='expense' AND date >= ? AND date <= ?`,
+        [uid, l.start_date, l.end_date]
+      );
+      const spent = Number(agg?.spent || 0);
+      const remaining = Math.max(0, Number(l.max_amount) - spent);
+      const percent = Number(l.max_amount) > 0 ? Math.min(100, Math.round((spent / Number(l.max_amount)) * 100)) : 0;
+
+      let phase = 'scheduled';
+      if (l.status !== 'active') phase = l.status; // paused / archived
+      else if (today < l.start_date) phase = 'scheduled';
+      else if (today > l.end_date)   phase = 'expired';
+      else                           phase = 'running';
+
+      enriched.push({ ...l, spent, remaining, percent, phase });
+    }
+    res.json(enriched);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/limits', async (req, res) => {
+  try {
+    const uid = req.authUserId;
+    let { title, start_date, duration_code, max_amount, status } = req.body || {};
+    title = String(title || '').trim();
+    start_date = String(start_date || '').trim();
+    duration_code = String(duration_code || '').trim();
+    const amt = typeof max_amount === 'number' ? max_amount : parseFloat(String(max_amount).replace(',', '.'));
+    status = status ? String(status).trim() : 'active';
+
+    if (!title) return res.status(400).json({ error: 'Título é obrigatório.' });
+    if (!start_date) return res.status(400).json({ error: 'start_date é obrigatório.' });
+    if (!LIMIT_DURATIONS[duration_code]) return res.status(400).json({ error: 'duration_code inválido.' });
+    if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'max_amount inválido.' });
+    if (!['active','paused','archived'].includes(status)) return res.status(400).json({ error: 'status inválido.' });
+
+    const end_date = computeLimitEnd(start_date, duration_code);
+    const st = await run(
+      `INSERT INTO limits (user_id, title, start_date, end_date, duration_code, max_amount, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [uid, title, start_date, end_date, duration_code, amt, status]
+    );
+    const row = await get(`SELECT * FROM limits WHERE user_id = ? AND id = ?`, [uid, st.lastID]);
+    res.status(201).json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/limits/:id', async (req, res) => {
+  try {
+    const uid = req.authUserId;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
+
+    const current = await get(`SELECT * FROM limits WHERE user_id = ? AND id = ?`, [uid, id]);
+    if (!current) return res.status(404).json({ error: 'Limite não encontrado.' });
+
+    const set = [], params = [];
+    let start_date = current.start_date;
+    let duration_code = current.duration_code;
+
+    if (req.body.title !== undefined) {
+      const v = String(req.body.title).trim();
+      if (!v) return res.status(400).json({ error: 'Título é obrigatório.' });
+      set.push('title = ?'); params.push(v);
+    }
+    if (req.body.start_date !== undefined) {
+      const v = String(req.body.start_date).trim();
+      if (!v) return res.status(400).json({ error: 'start_date é obrigatório.' });
+      start_date = v;
+      set.push('start_date = ?'); params.push(v);
+    }
+    if (req.body.duration_code !== undefined) {
+      const v = String(req.body.duration_code).trim();
+      if (!LIMIT_DURATIONS[v]) return res.status(400).json({ error: 'duration_code inválido.' });
+      duration_code = v;
+      set.push('duration_code = ?'); params.push(v);
+    }
+    if (req.body.max_amount !== undefined) {
+      const amt = typeof req.body.max_amount === 'number'
+        ? req.body.max_amount
+        : parseFloat(String(req.body.max_amount).replace(',', '.'));
+      if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'max_amount inválido.' });
+      set.push('max_amount = ?'); params.push(amt);
+    }
+    if (req.body.status !== undefined) {
+      const st = String(req.body.status).trim();
+      if (!['active','paused','archived'].includes(st)) return res.status(400).json({ error: 'status inválido.' });
+      set.push('status = ?'); params.push(st);
+    }
+
+    // Se mudar início/duração, recalcula fim
+    if (req.body.start_date !== undefined || req.body.duration_code !== undefined) {
+      const end = computeLimitEnd(start_date, duration_code);
+      set.push('end_date = ?'); params.push(end);
+    }
+
+    if (!set.length) return res.status(400).json({ error: 'Nada para atualizar.' });
+    params.push(uid, id);
+    await run(`UPDATE limits SET ${set.join(', ')} WHERE user_id = ? AND id = ?`, params);
+    const row = await get(`SELECT * FROM limits WHERE user_id = ? AND id = ?`, [uid, id]);
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/limits/:id', async (req, res) => {
+  try {
+    const uid = req.authUserId;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
+    const r = await run(`DELETE FROM limits WHERE user_id = ? AND id = ?`, [uid, id]);
+    if ((r?.changes || 0) === 0) return res.status(404).json({ error: 'Limite não encontrado.' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 
 // ================ START ================
 const PORT = process.env.PORT || 5000;

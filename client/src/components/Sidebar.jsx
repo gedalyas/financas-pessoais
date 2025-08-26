@@ -30,6 +30,7 @@ export default function Sidebar({ open = false, onClose }) {
         <NavLink to="/metas" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
           🎯 Metas
         </NavLink>
+        <NavLink to="/limites" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}>💳 Limites</NavLink>
 
         <button className="nav-item logout-btn" onClick={logout}>
           🚪 Sair

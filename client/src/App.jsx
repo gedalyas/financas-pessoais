@@ -8,6 +8,7 @@ import RecurrencesPage from './pages/Recurrences';
 import GoalsPage from './pages/Goals';
 import AuthPage from './pages/Auth';
 import ResetPasswordPage from './pages/ResetPassword';
+import LimitsPage from './pages/Limits';
 
 function isAuthed() {
   return Boolean(localStorage.getItem('pf_token'));
@@ -65,6 +66,7 @@ export default function App() {
           <Route path="/estatisticas" element={<StatsPage />} />
           <Route path="/recorrentes" element={<RecurrencesPage />} />
           <Route path="/metas" element={<GoalsPage />} />
+          <Route path="/limites" element={<LimitsPage />} />
         </Route>
       </Route>
 
