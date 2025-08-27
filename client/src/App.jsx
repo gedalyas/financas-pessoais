@@ -15,7 +15,21 @@ function isAuthed() {
 }
 
 function ProtectedRoute() {
-  if (!isAuthed()) return <Navigate to="/auth" replace />;
+  const location = useLocation();
+  if (!isAuthed()) {
+    // envia a rota atual em `state.from` para pós-login voltar para cá
+    return <Navigate to="/auth" replace state={{ from: location }} />;
+  }
+  return <Outlet />;
+}
+
+// Apenas para rotas públicas de autenticação: se já estiver logado, manda pra home (ou para `from`)
+function UnauthOnly() {
+  const location = useLocation();
+  if (isAuthed()) {
+    const from = location.state?.from?.pathname || '/';
+    return <Navigate to={from} replace />;
+  }
   return <Outlet />;
 }
 
@@ -23,12 +37,12 @@ function LayoutWithSidebar() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const loc = useLocation();
 
-  // fecha a sidebar ao trocar de rota (experiência melhor no mobile)
+  // fecha a sidebar ao trocar de rota (melhor UX no mobile)
   useEffect(() => { setSidebarOpen(false); }, [loc.pathname]);
 
   return (
     <div className="app-shell">
-      {/* Botão hambúrguer (mostra só em <=900px pelo CSS) */}
+      {/* Botão hambúrguer (visível no mobile via CSS) */}
       <button
         className="sidebar-toggle"
         aria-label="Abrir menu"
@@ -37,14 +51,14 @@ function LayoutWithSidebar() {
         ☰
       </button>
 
-      {/* Backdrop para clicar fora e fechar */}
+      {/* Backdrop para fechar clicando fora */}
       <div
         className={'sidebar-backdrop' + (sidebarOpen ? ' show' : '')}
         onClick={() => setSidebarOpen(false)}
         aria-hidden
       />
 
-      {/* Sidebar controlada */}
+      {/* Sidebar controlada (certifique-se de que o componente usa `open` para aplicar a classe `.open`) */}
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <main className="app-content">
@@ -57,9 +71,14 @@ function LayoutWithSidebar() {
 export default function App() {
   return (
     <Routes>
-      <Route path="/auth" element={<AuthPage />} />
+      {/* Rotas públicas de auth. Se já estiver logado, redireciona para a rota anterior ou `/` */}
+      <Route element={<UnauthOnly />}>
+        <Route path="/auth" element={<AuthPage />} />
+      </Route>
+      {/* Reset pode ficar público mesmo logado */}
       <Route path="/auth/reset" element={<ResetPasswordPage />} />
 
+      {/* Rotas protegidas */}
       <Route element={<ProtectedRoute />}>
         <Route element={<LayoutWithSidebar />}>
           <Route path="/" element={<TransactionsPage />} />
@@ -70,6 +89,7 @@ export default function App() {
         </Route>
       </Route>
 
+      {/* Fallback: manda para a home (que é protegida) ou para /auth se não tiver token */}
       <Route path="*" element={<Navigate to={isAuthed() ? '/' : '/auth'} replace />} />
     </Routes>
   );
