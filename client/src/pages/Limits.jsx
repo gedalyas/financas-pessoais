@@ -55,25 +55,27 @@ export default function LimitsPage() {
     }
   }
 
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => { load(); }, []);
 
   async function onCreate(e) {
     e.preventDefault();
     setErr('');
-    const body = {
-      title: title.trim(),
-      amount: parseFloat(String(amount).replace(',', '.')),
-      period_code: period,
-      start_date: startDate,
-      active,
-    };
-    if (!body.title || !Number.isFinite(body.amount)) {
-      setErr('Preencha título e valor (número).');
+
+    const max_amount = parseFloat(String(amount).replace(',', '.'));
+    if (!title.trim() || !Number.isFinite(max_amount) || max_amount <= 0) {
+      setErr('Preencha título e valor (número > 0).');
       return;
     }
+
+    // 🔑 Campos alinhados ao backend
+    const body = {
+      title: title.trim(),
+      max_amount,                       // (antes era "amount")
+      duration_code: period,            // (antes era "period_code")
+      start_date: startDate,
+      status: active ? 'active' : 'paused',
+    };
+
     const res = await apiFetch('/api/limits', {
       method: 'POST',
       body: JSON.stringify(body),
@@ -83,6 +85,7 @@ export default function LimitsPage() {
       setErr(j.error || 'Erro ao criar limite.');
       return;
     }
+
     // limpa e recarrega
     setTitle('');
     setAmount('');
@@ -92,9 +95,10 @@ export default function LimitsPage() {
 
   async function toggleActive(lim) {
     setRunningId(lim.id);
+    const nextStatus = lim.status === 'active' ? 'paused' : 'active';
     const res = await apiFetch(`/api/limits/${lim.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ active: !lim.active }),
+      body: JSON.stringify({ status: nextStatus }), // backend aceita "status"
     });
     setRunningId(null);
     if (res.ok) load();
@@ -111,18 +115,24 @@ export default function LimitsPage() {
 
   const sorted = useMemo(() => {
     const arr = [...list];
-    // ativos primeiro, depois por data de término mais próxima
     arr.sort((a, b) => {
-      if (a.active !== b.active) return b.active - a.active;
-      return String(a.period_end || '').localeCompare(String(b.period_end || ''));
+      const aAct = a.status === 'active' ? 1 : 0;
+      const bAct = b.status === 'active' ? 1 : 0;
+      if (aAct !== bAct) return bAct - aAct;
+      // depois, por data de término mais próxima
+      return String(a.end_date || '').localeCompare(String(b.end_date || ''));
     });
     return arr;
   }, [list]);
 
-  const statusColor = (s) => {
-    if (s === 'over') return 'var(--accent-2)';      // vermelho
-    if (s === 'warning') return '#f59e0b';           // amarelo
-    return 'var(--accent)';                          // verde
+  const statusPill = (status) =>
+    status === 'active' ? 'Ativo' : status === 'paused' ? 'Pausado' : 'Arquivado';
+
+  const barColorByUsage = (spent, cap) => {
+    if (cap <= 0) return 'var(--accent)';
+    if (spent > cap) return 'var(--accent-2)';   // estourou
+    if (spent > cap * 0.8) return '#f59e0b';     // 80%+
+    return 'var(--brand)';                       // ok (laranja)
   };
 
   return (
@@ -160,9 +170,7 @@ export default function LimitsPage() {
             <label>Período</label>
             <select className="select" value={period} onChange={(e) => setPeriod(e.target.value)}>
               {PERIOD_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
+                <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
           </div>
@@ -192,7 +200,7 @@ export default function LimitsPage() {
         </form>
       </section>
 
-      {/* Cards responsivos (ótimo no mobile) */}
+      {/* Cards */}
       <section className="cards-grid">
         {loading ? (
           <div className="helper">Carregando…</div>
@@ -200,24 +208,24 @@ export default function LimitsPage() {
           <div className="helper">Nenhum limite cadastrado.</div>
         ) : (
           sorted.map((l) => {
-            const spent = Number(l.spent ?? 0);
-            const cap = Number(l.amount ?? 0);
+            const cap = Number(l.max_amount ?? 0);      // <- vem como max_amount da API
+            const spent = Number(l.spent ?? 0);         // <- calculado no backend
             const remaining = cap - spent;
             const pct = cap > 0 ? Math.min(100, Math.max(0, Math.round((spent / cap) * 100))) : 0;
-            const color = statusColor(l.status || (spent > cap ? 'over' : spent > cap * 0.8 ? 'warning' : 'ok'));
+            const barColor = barColorByUsage(spent, cap);
 
             return (
               <div className="card" key={l.id}>
                 <div className="goal-head" style={{ alignItems: 'flex-start' }}>
                   <div className="goal-title" style={{ fontWeight: 700, fontSize: 16 }}>{l.title}</div>
-                  <span className="badge" style={{ borderColor: 'var(--panel-border)', color }}>
-                    {l.active ? 'Ativo' : 'Pausado'}
+                  <span className="badge" style={{ borderColor: 'var(--panel-border)', color: barColor }}>
+                    {statusPill(l.status)}
                   </span>
                 </div>
 
                 <div className="goal-line">
                   <div className="helper">
-                    Período: {fmtDate(l.start_date)} {l.period_end ? `→ ${fmtDate(l.period_end)}` : ''}
+                    Período: {fmtDate(l.start_date)} {l.end_date ? `→ ${fmtDate(l.end_date)}` : ''}
                     {typeof l.days_left === 'number' ? ` • ${l.days_left}d restantes` : ''}
                   </div>
                 </div>
@@ -228,10 +236,7 @@ export default function LimitsPage() {
                 </div>
 
                 <div className="progress" title={`${pct}%`}>
-                  <div
-                    className="progress-bar"
-                    style={{ width: `${pct}%`, background: color }}
-                  />
+                  <div className="progress-bar" style={{ width: `${pct}%`, background: barColor }} />
                 </div>
 
                 <div className="goal-line">
@@ -251,7 +256,7 @@ export default function LimitsPage() {
                     onClick={() => toggleActive(l)}
                     disabled={runningId === l.id}
                   >
-                    {l.active ? 'Pausar' : 'Ativar'}
+                    {l.status === 'active' ? 'Pausar' : 'Ativar'}
                   </button>
                   <button
                     className="button button-danger"

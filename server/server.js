@@ -1,4 +1,4 @@
-// server.js — API de Finanças Pessoais (multiusuário: categorias + transações + recorrentes + metas)
+// server.js — API de Finanças Pessoais (multiusuário: categorias + transações + recorrentes + metas + limites)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -117,6 +117,8 @@ function computeInitialNextRun(start_date, freq, interval, end_date) {
   if (end_date && next > end_date) next = end_date;
   return next;
 }
+
+// Durações de limites
 const LIMIT_DURATIONS = {
   '1d': { type: 'days',   n: 1,  label: '1 dia' },
   '1w': { type: 'days',   n: 7,  label: '1 semana' },
@@ -130,8 +132,10 @@ const LIMIT_DURATIONS = {
 function computeLimitEnd(startISO, durationCode) {
   const d = LIMIT_DURATIONS[durationCode];
   if (!d) return startISO;
-  if (d.type === 'days')   return addDays(startISO, d.n - 1);   // inclusivo
-  if (d.type === 'months') return addMonthsClamp(startISO, d.n) && addDays(addMonthsClamp(startISO, d.n), -1);
+  if (d.type === 'days')   return addDays(startISO, d.n - 1); // inclusivo
+  // meses: avança N meses e volta 1 dia para inclusivo
+  const afterNMonths = addMonthsClamp(startISO, d.n);
+  return addDays(afterNMonths, -1);
 }
 
 // ================ HELPERS DB ================
@@ -143,7 +147,6 @@ function run(sql, params = []) {
     })
   );
 }
-
 function all(sql, params = []) {
   return new Promise((resolve, reject) =>
     db.all(sql, params, (err, rows) => {
@@ -152,7 +155,6 @@ function all(sql, params = []) {
     })
   );
 }
-
 function get(sql, params = []) {
   return new Promise((resolve, reject) =>
     db.get(sql, params, (err, row) => {
@@ -193,7 +195,6 @@ async function seedDefaultCategoriesForUser(userId) {
   if ((countRow?.n || 0) > 0) return; // já tem alguma categoria
 
   for (const name of DEFAULT_CATEGORIES) {
-    // evita duplicar (concorrência) e pega cor determinística
     const exists = await existsCategory(userId, name);
     if (!exists) {
       const parsed = parseColor(undefined, name);
@@ -203,7 +204,6 @@ async function seedDefaultCategoriesForUser(userId) {
           [userId, name, parsed.color]
         );
       } catch (e) {
-        // Em caso de corrida, índice UNIQUE (user_id,name) evita duplicar; ignore
         if (!String(e.message || '').includes('UNIQUE')) throw e;
       }
     }
@@ -229,10 +229,8 @@ async function ensureUsersTable() {
 // Garante/obtém usuário padrão para migrar dados legados.
 async function ensureDefaultUser() {
   const email = process.env.DEV_DEFAULT_USER_EMAIL || 'default@local';
-  // Se já existir, só retorna
   let u = await get(`SELECT id FROM users WHERE email = ?`, [email]);
   if (!u) {
-    // Compatibilidade com esquemas que exigem password_hash NOT NULL
     await run(
       `INSERT INTO users (email, name, password_hash) VALUES (?, ?, '')`,
       [email, 'Default']
@@ -243,7 +241,7 @@ async function ensureDefaultUser() {
 }
 
 async function addColumnIfMissing(table, column, definition) {
-  if (!(await tableExists(table))) return; // se a tabela nem existe, deixa o ensureSchemaFresh criar
+  if (!(await tableExists(table))) return;
   const cols = await all(`PRAGMA table_info(${table})`);
   const has = Array.isArray(cols) && cols.some(c => c.name === column);
   if (!has) {
@@ -260,7 +258,7 @@ async function tableHasColumn(table, column) {
 // Rebuild de categories quando não tem user_id (remove UNIQUE global de name)
 async function migrateCategoriesToMultiUser(defaultUserId) {
   const exists = await tableExists('categories');
-  if (!exists) return; // banco zerado: categories será criada no ensureSchemaFresh
+  if (!exists) return;
 
   const hasUserId = await tableHasColumn('categories', 'user_id');
   if (hasUserId) {
@@ -298,7 +296,6 @@ async function migrateCategoriesToMultiUser(defaultUserId) {
     throw e;
   }
 }
-
 
 // Migrações gerais para colunas user_id nas demais tabelas
 async function migrateAddUserId(defaultUserId) {
@@ -414,7 +411,7 @@ async function ensureSchemaFresh() {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_goal_contrib_user_goal_date ON goal_contributions(user_id, goal_id, date)`);
 
-    await run(`
+  await run(`
     CREATE TABLE IF NOT EXISTS limits (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -430,7 +427,6 @@ async function ensureSchemaFresh() {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_limits_user ON limits(user_id)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_limits_user_status ON limits(user_id, status)`);
-
 }
 
 // Orquestra migrações (suporta bancos antigos)
@@ -438,7 +434,6 @@ async function ensureMigrations() {
   await ensureUsersTable();
   const defaultUserId = await ensureDefaultUser();
 
-  // Detecta se já existem tabelas antigas (parcialmente ou todas)
   const hasAnyLegacy =
     (await tableExists('categories')) ||
     (await tableExists('transactions')) ||
@@ -447,17 +442,14 @@ async function ensureMigrations() {
     (await tableExists('goal_contributions'));
 
   if (!hasAnyLegacy) {
-    // Banco novo: cria tudo já no formato multiusuário
     await ensureSchemaFresh();
     return;
   }
 
-  // Banco antigo: 1) migra categories  2) adiciona user_id nas demais  3) garante schema/índices
   await migrateCategoriesToMultiUser(defaultUserId);
   await migrateAddUserId(defaultUserId);
-  await ensureSchemaFresh(); // agora é seguro criar índices que usam user_id
+  await ensureSchemaFresh();
 }
-
 
 // dispara migração não bloqueante
 ensureMigrations().catch((e) => console.error('Falha em migrações:', e));
@@ -926,7 +918,6 @@ async function processRecurrences(onlyId = null, onlyUserId = null) {
          VALUES (?, ?, ?, ?, ?, ?)`,
         [r.user_id, next, r.description, r.category, r.type, r.amount]
       );
-      // contribuição automática se tiver goal_id
       if (r.goal_id) {
         const signed = r.type === 'expense' ? Math.abs(r.amount) : -Math.abs(r.amount);
         await run(
@@ -1078,7 +1069,6 @@ app.delete('/api/goals/:id', async (req, res) => {
 
     await run('BEGIN');
     try {
-      // Somente o que é do usuário
       await run(
         `DELETE FROM transactions 
          WHERE user_id = ? AND id IN (
@@ -1207,27 +1197,37 @@ app.get('/api/limits', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST compatível com chaves alternativas (period/period_key/total/total_limit)
 app.post('/api/limits', async (req, res) => {
   try {
     const uid = req.authUserId;
-    let { title, start_date, duration_code, max_amount, status } = req.body || {};
-    title = String(title || '').trim();
-    start_date = String(start_date || '').trim();
-    duration_code = String(duration_code || '').trim();
-    const amt = typeof max_amount === 'number' ? max_amount : parseFloat(String(max_amount).replace(',', '.'));
-    status = status ? String(status).trim() : 'active';
+
+    const title = String(req.body.title ?? '').trim();
+    const start_date = String(req.body.start_date ?? '').trim();
+    const duration_code = String(
+      req.body.duration_code ?? req.body.period ?? req.body.period_key ?? ''
+    ).trim();
+
+    const rawMax =
+      req.body.max_amount ?? req.body.total_limit ?? req.body.total;
+    const max_amount =
+      typeof rawMax === 'number'
+        ? rawMax
+        : parseFloat(String(rawMax ?? '').replace(',', '.'));
+
+    const status = String(req.body.status ?? 'active').trim();
 
     if (!title) return res.status(400).json({ error: 'Título é obrigatório.' });
     if (!start_date) return res.status(400).json({ error: 'start_date é obrigatório.' });
     if (!LIMIT_DURATIONS[duration_code]) return res.status(400).json({ error: 'duration_code inválido.' });
-    if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'max_amount inválido.' });
+    if (!Number.isFinite(max_amount) || max_amount <= 0) return res.status(400).json({ error: 'max_amount inválido.' });
     if (!['active','paused','archived'].includes(status)) return res.status(400).json({ error: 'status inválido.' });
 
     const end_date = computeLimitEnd(start_date, duration_code);
     const st = await run(
       `INSERT INTO limits (user_id, title, start_date, end_date, duration_code, max_amount, status) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [uid, title, start_date, end_date, duration_code, amt, status]
+      [uid, title, start_date, end_date, duration_code, max_amount, status]
     );
     const row = await get(`SELECT * FROM limits WHERE user_id = ? AND id = ?`, [uid, st.lastID]);
     res.status(201).json(row);
@@ -1258,16 +1258,15 @@ app.patch('/api/limits/:id', async (req, res) => {
       start_date = v;
       set.push('start_date = ?'); params.push(v);
     }
-    if (req.body.duration_code !== undefined) {
-      const v = String(req.body.duration_code).trim();
+    if (req.body.duration_code !== undefined || req.body.period !== undefined || req.body.period_key !== undefined) {
+      const v = String(req.body.duration_code ?? req.body.period ?? req.body.period_key ?? '').trim();
       if (!LIMIT_DURATIONS[v]) return res.status(400).json({ error: 'duration_code inválido.' });
       duration_code = v;
       set.push('duration_code = ?'); params.push(v);
     }
-    if (req.body.max_amount !== undefined) {
-      const amt = typeof req.body.max_amount === 'number'
-        ? req.body.max_amount
-        : parseFloat(String(req.body.max_amount).replace(',', '.'));
+    if (req.body.max_amount !== undefined || req.body.total !== undefined || req.body.total_limit !== undefined) {
+      const raw = req.body.max_amount ?? req.body.total_limit ?? req.body.total;
+      const amt = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(',', '.'));
       if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'max_amount inválido.' });
       set.push('max_amount = ?'); params.push(amt);
     }
@@ -1278,7 +1277,7 @@ app.patch('/api/limits/:id', async (req, res) => {
     }
 
     // Se mudar início/duração, recalcula fim
-    if (req.body.start_date !== undefined || req.body.duration_code !== undefined) {
+    if (req.body.start_date !== undefined || req.body.duration_code !== undefined || req.body.period !== undefined || req.body.period_key !== undefined) {
       const end = computeLimitEnd(start_date, duration_code);
       set.push('end_date = ?'); params.push(end);
     }
@@ -1301,7 +1300,6 @@ app.delete('/api/limits/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-
 
 // ================ START ================
 const PORT = process.env.PORT || 5000;
