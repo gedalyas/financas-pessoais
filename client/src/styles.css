@@ -242,11 +242,45 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
   z-index: 1200;
 }
 .sidebar-brand {
-  font-weight: 900; font-size: 18px; margin-bottom: 16px;
-  color: var(--brand);
-  letter-spacing: .4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;         /* espaço entre logo e texto */
+  line-height: 1;
+  white-space: nowrap;
 }
 .nav { display: flex; flex-direction: column; gap: 6px; }
+
+.sidebar-brand span {
+  font-size: clamp(1.1rem, 0.4vw + 0.9rem, 1.6rem);
+  font-weight: 700;
+}
+
+.brand-logo {
+  height: 1.9em;   /* proporcional ao texto */
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
+
+/* Tablet e menores */
+@media (max-width: 768px) {
+  .sidebar-brand { gap: 6px; }
+  .sidebar-brand span {
+    font-size: clamp(1rem, 1.2vw + 0.85rem, 1.4rem);
+  }
+  .brand-logo { height: 1.4em; }
+}
+
+/* Celulares pequenos */
+@media (max-width: 480px) {
+  .sidebar-brand { gap: 1px; }
+  .sidebar-brand span {
+    font-size: clamp(1rem, 2vw + 0.7rem, 1.2rem);
+  }
+  .brand-logo { height: 1.6em; }
+}
+  /* ~altura da fonte; diminua para 1em se quiser menor */
+
 
 /* Itens da navegação (anchor e button compartilham a mesma classe) */
 .nav-item {

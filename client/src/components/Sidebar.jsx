@@ -1,6 +1,7 @@
 // client/src/components/Sidebar.jsx
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import Logo from '../assets/prospera_logo.png'; // ajuste o caminho/arquivo (png/svg)
 
 export default function Sidebar({ open = false, onClose }) {
   const nav = useNavigate();
@@ -9,55 +10,36 @@ export default function Sidebar({ open = false, onClose }) {
     localStorage.removeItem('pf_token');
     localStorage.removeItem('pf_user');
     nav('/auth');
-    onClose?.(); // fecha a sidebar no mobile
+    onClose?.();
   }
 
   const closeOnClick = () => onClose?.();
 
   return (
     <aside className={'sidebar' + (open ? ' open' : '')} aria-label="Menu lateral">
-      <div className="sidebar-brand">Minhas Finanças</div>
+      <div className="sidebar-brand">
+        <img src={Logo} alt="Logo da marca" className="brand-logo" />
+        <span>Minhas Finanças</span>
+      </div>
 
       <nav className="nav" role="navigation">
-        <NavLink
-          to="/"
-          end
-          className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
-          onClick={closeOnClick}
-        >
+        <NavLink to="/" end className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
           📒 Dashboard
         </NavLink>
-
-        <NavLink
-          to="/estatisticas"
-          className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
-          onClick={closeOnClick}
-        >
+        <NavLink to="/estatisticas" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
           📈 Estatísticas
         </NavLink>
-
-        <NavLink
-          to="/recorrentes"
-          className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
-          onClick={closeOnClick}
-        >
+        <NavLink to="/recorrentes" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
           🔁 Recorrentes
         </NavLink>
-
-        <NavLink
-          to="/metas"
-          className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
-          onClick={closeOnClick}
-        >
+        <NavLink to="/metas" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
           🎯 Metas
         </NavLink>
-
-        <NavLink
-          to="/limites"
-          className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
-          onClick={closeOnClick}
-        >
+        <NavLink to="/limites" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
           💳 Limites
+        </NavLink>
+        <NavLink to="/invest" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
+          💰 Investimentos
         </NavLink>
 
         <button type="button" className="nav-item logout-btn" onClick={logout}>

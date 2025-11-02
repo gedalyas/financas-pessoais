@@ -26,6 +26,13 @@ db.serialize(() => {
 const mountAuth = require('./auth');
 mountAuth(app, db);
 
+app.use('/api/goals', app.authRequired, (req, _res, next) => {
+  req.authUserId = req.user.id;
+  next();
+});
+
+
+
 // ================ CORES / CATEGORIAS ================
 const PALETTE = [
   '#22c55e', '#ef4444', '#3b82f6', '#a855f7', '#f59e0b', '#10b981',
@@ -951,19 +958,26 @@ function monthsBetween(startISO, endISO) {
 }
 
 // Lista metas com campos calculados
-app.get('/api/goals', async (req, res) => {
+// Listar metas
+app.get('/api/goals', app.authRequired, async (req, res) => {
   try {
-    const uid = req.authUserId;
+    const uid = req.user.id;
     const rows = await all(
       `
       SELECT g.*,
              COALESCE(SUM(gc.amount), 0) AS saved
       FROM goals g
-      LEFT JOIN goal_contributions gc ON gc.user_id = g.user_id AND gc.goal_id = g.id
+      LEFT JOIN goal_contributions gc
+        ON gc.user_id = g.user_id AND gc.goal_id = g.id
       WHERE g.user_id = ?
       GROUP BY g.id
       ORDER BY 
-        CASE g.status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'achieved' THEN 2 ELSE 3 END,
+        CASE g.status
+          WHEN 'active'   THEN 0
+          WHEN 'paused'   THEN 1
+          WHEN 'achieved' THEN 2
+          ELSE 3
+        END,
         g.id ASC
       `,
       [uid]
@@ -985,20 +999,25 @@ app.get('/api/goals', async (req, res) => {
     });
 
     res.json(enriched);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Criar meta
-app.post('/api/goals', async (req, res) => {
+app.post('/api/goals', app.authRequired, async (req, res) => {
   try {
-    const uid = req.authUserId;
+    const uid = req.user.id;
     const { name, target_amount, color, target_date, notes } = req.body || {};
     const clean = String(name || '').trim();
-    const amt = typeof target_amount === 'number' ? target_amount : parseFloat(String(target_amount).replace(',', '.'));
+    const amt = typeof target_amount === 'number'
+      ? target_amount
+      : parseFloat(String(target_amount ?? '').replace(',', '.'));
+
     if (!clean) return res.status(400).json({ error: 'Nome é obrigatório.' });
     if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'target_amount inválido.' });
 
-    let parsedColor = parseColor(color, clean);
+    const parsedColor = parseColor(color, clean);
     if (!parsedColor.ok) return res.status(400).json({ error: parsedColor.error });
 
     const start = todayLocalISO();
@@ -1007,63 +1026,79 @@ app.post('/api/goals', async (req, res) => {
     const stmt = await run(
       `INSERT INTO goals (user_id, name, target_amount, color, start_date, target_date, status, notes)
        VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
-      [uid, clean, amt, parsedColor.color, start, tdate, notes || null]
+      [uid, clean, amt, parsedColor.color, start, tdate, notes ?? null]
     );
     const row = await get(`SELECT * FROM goals WHERE user_id = ? AND id = ?`, [uid, stmt.lastID]);
     res.status(201).json(row);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Atualizar meta
-app.patch('/api/goals/:id', async (req, res) => {
+app.patch('/api/goals/:id', app.authRequired, async (req, res) => {
   try {
-    const uid = req.authUserId;
+    const uid = req.user.id;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
+
     const current = await get(`SELECT * FROM goals WHERE user_id = ? AND id = ?`, [uid, id]);
     if (!current) return res.status(404).json({ error: 'Meta não encontrada.' });
 
     const set = [], params = [];
+
     if (req.body.name !== undefined) {
       const v = String(req.body.name).trim();
       if (!v) return res.status(400).json({ error: 'Nome é obrigatório.' });
       set.push('name = ?'); params.push(v);
     }
+
     if (req.body.target_amount !== undefined) {
-      const amt = typeof req.body.target_amount === 'number' ? req.body.target_amount : parseFloat(String(req.body.target_amount).replace(',', '.'));
+      const amt = typeof req.body.target_amount === 'number'
+        ? req.body.target_amount
+        : parseFloat(String(req.body.target_amount ?? '').replace(',', '.'));
       if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'target_amount inválido.' });
       set.push('target_amount = ?'); params.push(amt);
     }
+
     if (req.body.color !== undefined) {
       const parsed = parseColor(req.body.color, req.body.name ?? current.name);
       if (!parsed.ok) return res.status(400).json({ error: parsed.error });
       set.push('color = ?'); params.push(parsed.color);
     }
+
     if (req.body.target_date !== undefined) {
       const v = req.body.target_date ? String(req.body.target_date).trim() : null;
       set.push('target_date = ?'); params.push(v);
     }
+
     if (req.body.status !== undefined) {
       const st = String(req.body.status).trim();
-      if (!['active','paused','achieved','archived'].includes(st)) return res.status(400).json({ error: 'status inválido.' });
+      if (!['active', 'paused', 'achieved', 'archived'].includes(st)) {
+        return res.status(400).json({ error: 'status inválido.' });
+      }
       set.push('status = ?'); params.push(st);
     }
+
     if (req.body.notes !== undefined) {
       set.push('notes = ?'); params.push(req.body.notes ? String(req.body.notes) : null);
     }
 
     if (!set.length) return res.status(400).json({ error: 'Nada para atualizar.' });
+
     params.push(uid, id);
     await run(`UPDATE goals SET ${set.join(', ')} WHERE user_id = ? AND id = ?`, params);
     const row = await get(`SELECT * FROM goals WHERE user_id = ? AND id = ?`, [uid, id]);
     res.json(row);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// Excluir meta (cascata manual: contribuições + transações ligadas)
-app.delete('/api/goals/:id', async (req, res) => {
+// Excluir meta (cascata manual)
+app.delete('/api/goals/:id', app.authRequired, async (req, res) => {
   try {
-    const uid = req.authUserId;
+    const uid = req.user.id;
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido.' });
 
@@ -1082,6 +1117,7 @@ app.delete('/api/goals/:id', async (req, res) => {
       const result = await run(`DELETE FROM goals WHERE user_id = ? AND id = ?`, [uid, id]);
 
       await run('COMMIT');
+
       if ((result?.changes ?? 0) === 0) {
         return res.status(404).json({ error: 'Meta não encontrada.' });
       }
@@ -1090,34 +1126,45 @@ app.delete('/api/goals/:id', async (req, res) => {
       await run('ROLLBACK');
       throw e;
     }
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Listar contribuições
-app.get('/api/goals/:id/contributions', async (req, res) => {
+app.get('/api/goals/:id/contributions', app.authRequired, async (req, res) => {
   try {
-    const uid = req.authUserId;
+    const uid = req.user.id;
     const id = Number(req.params.id);
     const rows = await all(
       `SELECT * FROM goal_contributions WHERE user_id = ? AND goal_id = ? ORDER BY date ASC, id ASC`,
       [uid, id]
     );
     res.json(rows);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// Criar contribuição (depósito + / retirada -) com opção de gerar transação
-app.post('/api/goals/:id/contributions', async (req, res) => {
+// Criar contribuição
+app.post('/api/goals/:id/contributions', app.authRequired, async (req, res) => {
   try {
-    const uid = req.authUserId;
+    const uid = req.user.id;
     const id = Number(req.params.id);
+
     const g = await get(`SELECT * FROM goals WHERE user_id = ? AND id = ?`, [uid, id]);
     if (!g) return res.status(404).json({ error: 'Meta não encontrada.' });
 
     let { date, amount, createTransaction, notes } = req.body || {};
     date = String(date || '').trim() || todayLocalISO();
-    const amt = typeof amount === 'number' ? amount : parseFloat(String(amount).replace(',', '.'));
-    if (!Number.isFinite(amt) || amt === 0) return res.status(400).json({ error: 'amount inválido.' });
+
+    const amt = typeof amount === 'number'
+      ? amount
+      : parseFloat(String(amount ?? '').replace(',', '.'));
+
+    if (!Number.isFinite(amt) || amt === 0) {
+      return res.status(400).json({ error: 'amount inválido.' });
+    }
 
     let txId = null;
     if (createTransaction) {
@@ -1134,33 +1181,42 @@ app.post('/api/goals/:id/contributions', async (req, res) => {
     const st = await run(
       `INSERT INTO goal_contributions (user_id, goal_id, date, amount, transaction_id, source, notes)
        VALUES (?, ?, ?, ?, ?, 'manual', ?)`,
-      [uid, id, date, amt, txId, notes || null]
+      [uid, id, date, amt, txId, notes ?? null]
     );
 
     const row = await get(`SELECT * FROM goal_contributions WHERE user_id = ? AND id = ?`, [uid, st.lastID]);
     res.status(201).json(row);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// Excluir contribuição (opcionalmente apaga transação vinculada ?deleteTransaction=1)
-app.delete('/api/goals/:id/contributions/:cid', async (req, res) => {
+// Excluir contribuição (opção de apagar transação vinculada)
+app.delete('/api/goals/:id/contributions/:cid', app.authRequired, async (req, res) => {
   try {
-    const uid = req.authUserId;
+    const uid = req.user.id;
     const id = Number(req.params.id);
     const cid = Number(req.params.cid);
     const delTx = String(req.query.deleteTransaction || '').toLowerCase();
     const alsoTx = delTx === '1' || delTx === 'true';
 
-    const row = await get(`SELECT * FROM goal_contributions WHERE user_id = ? AND id = ? AND goal_id = ?`, [uid, cid, id]);
+    const row = await get(
+      `SELECT * FROM goal_contributions WHERE user_id = ? AND id = ? AND goal_id = ?`,
+      [uid, cid, id]
+    );
     if (!row) return res.status(404).json({ error: 'Contribuição não encontrada.' });
 
     if (alsoTx && row.transaction_id) {
       await run(`DELETE FROM transactions WHERE user_id = ? AND id = ?`, [uid, row.transaction_id]);
     }
     await run(`DELETE FROM goal_contributions WHERE user_id = ? AND id = ?`, [uid, cid]);
+
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
+
 
 // ================ LIMITS (CRUD + métricas) ================
 app.get('/api/limits', async (req, res) => {

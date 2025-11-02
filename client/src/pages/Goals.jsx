@@ -1,8 +1,9 @@
+// client/src/pages/Goals.jsx
 import React, { useEffect, useMemo, useState } from 'react'; 
 import Modal from '../ui/Modal';
 import ConfirmDialog from '../ui/ConfirmDialog';
+import { apiJson } from '../lib/api';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const fmtBRL = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v ?? 0);
 const toDateLabel = (iso) => (iso ? new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR') : '');
 const todayISO = () => new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
@@ -59,12 +60,11 @@ export default function GoalsPage() {
   async function load() {
     setLoading(true);
     try {
-      const r = await fetch(`${API_URL}/api/goals`, { cache: 'no-store' });
-      const j = await r.json();
-      setList(Array.isArray(j) ? j : []);
+      const data = await apiJson('/api/goals');
+      setList(Array.isArray(data) ? data : []);
       setErr(null);
     } catch (e) {
-      setErr('Falha ao carregar metas');
+      setErr(e.message || 'Falha ao carregar metas');
     } finally {
       setLoading(false);
     }
@@ -90,14 +90,17 @@ export default function GoalsPage() {
       color: gColor || undefined,
       notes: gNotes || undefined
     };
-    const r = await fetch(`${API_URL}/api/goals`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-    });
-    const j = await r.json().catch(()=> ({}));
-    if (!r.ok) { alert(j.error || 'Erro ao criar meta'); return; }
-    setOpenNew(false);
-    setGName(''); setGTarget(''); setGTargetDate(''); setGColor(''); setGNotes('');
-    load();
+    try {
+      await apiJson('/api/goals', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setOpenNew(false);
+      setGName(''); setGTarget(''); setGTargetDate(''); setGColor(''); setGNotes('');
+      load();
+    } catch (e) {
+      alert(e.message || 'Erro ao criar meta');
+    }
   }
 
   function openContribModal(g, m) {
@@ -113,31 +116,37 @@ export default function GoalsPage() {
     if (!Number.isFinite(val) || val <= 0) { alert('Valor inválido'); return; }
     const signed = mode === 'deposit' ? +val : -val;
     const payload = { date: cDate, amount: signed, createTransaction: !!cCreateTx, notes: cNotes || undefined };
-    const r = await fetch(`${API_URL}/api/goals/${gSel.id}/contributions`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-    });
-    const j = await r.json().catch(()=> ({}));
-    if (!r.ok) { alert(j.error || 'Erro ao salvar'); return; }
-    setOpenContrib(false); setGSel(null);
-    load();
+    try {
+      await apiJson(`/api/goals/${gSel.id}/contributions`, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setOpenContrib(false); setGSel(null);
+      load();
+    } catch (e) {
+      alert(e.message || 'Erro ao salvar');
+    }
   }
 
   async function setStatus(g, st) {
-    const r = await fetch(`${API_URL}/api/goals/${g.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st })
-    });
-    if (r.ok) load();
+    try {
+      await apiJson(`/api/goals/${g.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: st })
+      });
+      load();
+    } catch {}
   }
 
   async function deleteGoalNow() {
     if (!toDelete) return;
-    const r = await fetch(`${API_URL}/api/goals/${toDelete.id}`, { method: 'DELETE' });
-    setToDelete(null);
-    if (!r.ok) {
-      const j = await r.json().catch(()=> ({}));
-      alert(j.error || 'Falha ao excluir meta.');
-    } else {
+    try {
+      await apiJson(`/api/goals/${toDelete.id}`, { method: 'DELETE' });
+      setToDelete(null);
       load();
+    } catch (e) {
+      setToDelete(null);
+      alert(e.message || 'Falha ao excluir meta.');
     }
   }
 
@@ -179,26 +188,32 @@ export default function GoalsPage() {
       active: true,
       goal_id: autoGoal.id, // 🔗 vincula à meta para criar contribuição automática
     };
-    const r = await fetch(`${API_URL}/api/recurrences`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-    });
-    const j = await r.json().catch(()=> ({}));
-    if (!r.ok) { alert(j.error || 'Erro ao criar recorrência.'); return; }
-    setOpenAuto(false);
+    try {
+      await apiJson('/api/recurrences', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setOpenAuto(false);
+    } catch (e) {
+      alert(e.message || 'Erro ao criar recorrência.');
+    }
   }
 
   // carregar contribuições e montar timeline cumulativa
   async function toggleTimeline(goal) {
     setShowTimeline(prev => ({...prev, [goal.id]: !prev[goal.id]}));
     if (!timelineData[goal.id]) {
-      const r = await fetch(`${API_URL}/api/goals/${goal.id}/contributions`, { cache:'no-store' });
-      const arr = await r.json().catch(()=> []);
-      let cum = 0;
-      const points = arr.map(x => {
-        cum += Number(x.amount || 0);
-        return { date: x.date, cum };
-      });
-      setTimelineData(prev => ({...prev, [goal.id]: points}));
+      try {
+        const arr = await apiJson(`/api/goals/${goal.id}/contributions`, { cache:'no-store' });
+        let cum = 0;
+        const points = arr.map(x => {
+          cum += Number(x.amount || 0);
+          return { date: x.date, cum };
+        });
+        setTimelineData(prev => ({...prev, [goal.id]: points}));
+      } catch {
+        setTimelineData(prev => ({...prev, [goal.id]: []}));
+      }
     }
   }
 

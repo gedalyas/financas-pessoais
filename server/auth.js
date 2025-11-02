@@ -53,18 +53,19 @@ module.exports = function authModule(app, db) {
 
   // 🔑 Middleware GLOBAL: decodifica Bearer token e popula req.user
   app.use((req, _res, next) => {
-    try {
-      const h = String(req.headers.authorization || '');
-      const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-      if (token) {
-        const dec = jwt.verify(token, JWT_SECRET);
-        req.user = { id: dec.sub, email: dec.email };
-      }
-    } catch (_) {
-      // token ausente / inválido / expirado -> segue sem req.user
+  try {
+    const h = String(req.headers.authorization || '');
+    const token = h.startsWith('Bearer ') ? h.slice(7) : null;
+    if (token) {
+      const dec = jwt.verify(token, JWT_SECRET);
+      req.user = { id: dec.sub, email: dec.email };
     }
-    next();
-  });
+  } catch (e) {
+    // segue sem req.user
+  }
+  next();
+});
+
 
   // Middleware para rotas que exigem auth explícito
   function authRequired(req, res, next) {
