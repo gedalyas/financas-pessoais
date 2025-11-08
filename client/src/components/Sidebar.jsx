@@ -1,7 +1,7 @@
 // client/src/components/Sidebar.jsx
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import Logo from '../assets/prospera_logo.png'; // ajuste o caminho/arquivo (png/svg)
+import Logo from '../assets/prospera_logo.png';
 
 export default function Sidebar({ open = false, onClose }) {
   const nav = useNavigate();
@@ -17,9 +17,12 @@ export default function Sidebar({ open = false, onClose }) {
 
   return (
     <aside className={'sidebar' + (open ? ' open' : '')} aria-label="Menu lateral">
-      <div className="sidebar-brand">
-        <img src={Logo} alt="Logo da marca" className="brand-logo" />
-        <span>Minhas Finanças</span>
+      {/* Header da sidebar (apenas brand; sem botão X) */}
+      <div className="sidebar-header">
+        <div className="sidebar-brand">
+          <img src={Logo} alt="Logo da marca" className="brand-logo" />
+          <span>Minhas Finanças</span>
+        </div>
       </div>
 
       <nav className="nav" role="navigation">
@@ -40,6 +43,9 @@ export default function Sidebar({ open = false, onClose }) {
         </NavLink>
         <NavLink to="/invest" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
           💰 Investimentos
+        </NavLink>
+        <NavLink to="/settings" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
+          ⚙️ Configurações
         </NavLink>
 
         <button type="button" className="nav-item logout-btn" onClick={logout}>

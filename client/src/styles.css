@@ -5,25 +5,25 @@
   --panel: #ffffff;
   --panel-2: #f9fafb;
 
-  --text: #0f172a;          /* quase preto para legibilidade */
-  --muted: #475569;         /* cinza-azulado para textos auxiliares */
+  --text: #0f172a;
+  --muted: #475569;
   --muted-3: #64748b;
 
   /* Marca laranja (estilo Inter) */
-  --brand: #ff7a00;         /* Inter Orange */
+  --brand: #ff7a00;
   --brand-600: #e66e00;
   --brand-700: #cc6200;
   --brand-300: #ffb15c;
 
   /* Semânticas */
-  --accent: var(--brand);   /* usamos laranja como destaque */
-  --accent-2: #ef4444;      /* vermelho p/ alertas/despesas */
-  --info: #2563eb;          /* azul para saldos/info */
+  --accent: var(--brand);
+  --accent-2: #ef4444;
+  --info: #2563eb;
 
-  --border: #e5e7eb;        /* borda clara */
+  --border: #e5e7eb;
   --panel-border: var(--border);
 
-  --ring: rgba(255, 122, 0, 0.35); /* foco laranja suave */
+  --ring: rgba(255, 122, 0, 0.35);
   --shadow-1: 0 8px 24px rgba(15, 23, 42, .06);
   --shadow-2: 0 14px 38px rgba(15, 23, 42, .10);
 
@@ -109,7 +109,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
 .button:hover { background: linear-gradient(180deg, #ffffff, #f1f5f9); }
 .button:active { transform: translateY(1px); }
 
-/* Botão primário laranja (reaproveita .button-success) */
+/* Botão primário laranja */
 .button-success {
   color: #ffffff;
   background: linear-gradient(180deg, var(--brand), var(--brand-600));
@@ -174,7 +174,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
 .badge {
   padding: 2px 10px; border-radius: 999px; font-size: 12px;
   border: 1px solid #e6e6e6;
-  background: #fff7f0;      /* leve toque laranja */
+  background: #fff7f0;
   color: #7a3a00;
 }
 .badge.income {
@@ -241,48 +241,70 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
   padding: 16px;
   z-index: 1200;
 }
+
+/* Header da sidebar (brand) */
+.sidebar-header {
+  position: sticky;      /* no mobile isso ajuda a grudar ao topo */
+  top: 0;
+  z-index: 2;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0 10px;
+  margin: 0;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+/* Brand */
 .sidebar-brand {
   display: flex;
   align-items: center;
-  gap: 6px;         /* espaço entre logo e texto */
+  gap: 6px;
   line-height: 1;
   white-space: nowrap;
 }
+
+/* (Sem botão X) */
+.sidebar-close { display: none !important; }
+
 .nav { display: flex; flex-direction: column; gap: 6px; }
 
+/* Título e logo (base) */
 .sidebar-brand span {
   font-size: clamp(1.1rem, 0.4vw + 0.9rem, 1.6rem);
   font-weight: 700;
 }
-
 .brand-logo {
-  height: 1.9em;   /* proporcional ao texto */
+  height: 1.2em;
   width: auto;
   object-fit: contain;
   display: block;
 }
 
-/* Tablet e menores */
+/* Tablet */
 @media (max-width: 768px) {
   .sidebar-brand { gap: 6px; }
   .sidebar-brand span {
     font-size: clamp(1rem, 1.2vw + 0.85rem, 1.4rem);
   }
-  .brand-logo { height: 1.4em; }
+  .brand-logo { height: 1.1em; }
 }
 
 /* Celulares pequenos */
 @media (max-width: 480px) {
-  .sidebar-brand { gap: 1px; }
+  .sidebar-brand { gap: 4px; }
   .sidebar-brand span {
     font-size: clamp(1rem, 2vw + 0.7rem, 1.2rem);
   }
-  .brand-logo { height: 1.6em; }
+  .brand-logo { height: 1em; }
 }
-  /* ~altura da fonte; diminua para 1em se quiser menor */
 
+/* Itens do menu */
+.nav { margin-top: 10px; }
+.nav .nav-item:first-child { margin-top: 2px; }
 
-/* Itens da navegação (anchor e button compartilham a mesma classe) */
 .nav-item {
   display: block;
   width: 100%;
@@ -292,8 +314,6 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
   text-decoration: none;
   color: var(--text);
   border: 1px solid transparent;
-
-  /* reset para <button> */
   background: transparent;
   appearance: none; -webkit-appearance: none;
   font: inherit; cursor: pointer;
@@ -312,7 +332,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
   background: linear-gradient(180deg, var(--brand-300), var(--brand));
 }
 
-/* Botão Sair com leve destaque */
+/* Botão Sair */
 .logout-btn {
   margin-top: 8px;
   background: #fff1f2;
@@ -332,16 +352,18 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
 /* ---------- Sidebar mobile: botão + backdrop ---------- */
 .sidebar-toggle {
   position: fixed;
-  top: 12px;
-  left: 12px;
+  top: max(12px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
   z-index: 2001;
-  display: none;
-  padding: 8px 10px;
-  border-radius: 10px;
+  display: none;                 /* escondido no desktop */
+  width: 44px; height: 44px;     /* área de toque ideal */
+  padding: 0;
+  border-radius: 12px;
   border: 1px solid var(--panel-border);
   background: #ffffff;
   color: var(--text);
   box-shadow: var(--shadow-1);
+  align-items: center; justify-content: center;
 }
 .sidebar-toggle:focus { outline: 0; box-shadow: 0 0 0 3px var(--ring); }
 
@@ -379,7 +401,9 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
   border: 1px solid #e2e8f0;
 }
 .progress-bar {
-  height: 100%; border-radius: 8px; transition: width .25s ease;
+  height: 100%;
+  border-radius: 8px;
+  transition: width .25s ease;
   background: linear-gradient(90deg, var(--brand-300), var(--brand));
 }
 
@@ -450,17 +474,24 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
   .filters-grid, .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* <= 900px: sidebar off-canvas + botão hambúrguer */
+/* <= 900px: sidebar off-canvas + botão hambúrguer visível */
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: 1fr; }
+
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
-    width: var(--sidebar-w);
+    width: min(var(--sidebar-w), 86vw);  /* mais enxuta no mobile */
+    max-width: 320px;
+    min-width: 240px;
+    height: 100dvh;                      /* corrige 100vh em iOS/Android */
     transform: translateX(-100%);
     box-shadow: 2px 0 24px rgba(15, 23, 42, 0.12);
     background: #ffffff;
     transition: transform .2s ease;
+    padding: 12px;                        /* conteúdo mais próximo */
+    overflow-y: auto;                     /* rola só a sidebar */
+    -webkit-overflow-scrolling: touch;
   }
   .sidebar.open { transform: translateX(0); }
   .sidebar-backdrop.show { display: block; }
@@ -469,9 +500,22 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
   .app-content { padding: 16px; }
   .header { flex-wrap: wrap; gap: 8px; }
   .header .helper { margin-top: 4px; }
+
+  /* Brand mais “encostado” no mobile */
+  .sidebar-brand { margin: 0; padding: 0; gap: 6px; }
+
+  /* Tipografia/ícone mais compactos no mobile */
+  .sidebar-brand span { font-size: clamp(1rem, 2vw + 0.75rem, 1.2rem); }
+  .brand-logo { height: 1.1em; }
+
+  /* Itens mais compactos */
+  .nav-item { padding: 9px 10px; }
+
+  /* Se o hambúrguer estiver depois da sidebar no DOM, esconda-o quando aberta */
+  .sidebar.open ~ .sidebar-toggle { display: none !important; }
 }
 
-/* <= 720px: tabela vira “cards” usando data-label */
+/* <= 720px: tabela vira “cards” */
 @media (max-width: 720px) {
   .summary-cards { grid-template-columns: 1fr; }
   .filters-grid, .form-grid, .form-grid.modal-grid { grid-template-columns: 1fr; }
@@ -508,9 +552,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: opacity(.75); }
   .heatgrid { grid-template-columns: repeat(3, 1fr); }
 }
 
-/* Mobile: reserva espaço do botão hambúrguer à esquerda */
+/* Mobile: reserva espaço do botão hambúrguer à esquerda no header */
 @media (max-width: 900px) {
   .header .title { padding-left: 56px; }
-  .sidebar .sidebar-brand { padding-left: 56px; }
 }
-

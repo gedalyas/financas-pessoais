@@ -6,6 +6,9 @@ const morgan = require('morgan');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
+
+
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -26,10 +29,13 @@ db.serialize(() => {
 const mountAuth = require('./auth');
 mountAuth(app, db);
 
-app.use('/api/goals', app.authRequired, (req, _res, next) => {
-  req.authUserId = req.user.id;
+app.use('/api', app.authRequired, (req, _res, next) => {
+  req.authUserId = Number(req.user.id);
   next();
 });
+
+const mountSettings = require('./settings');
+mountSettings(app, db);
 
 
 
