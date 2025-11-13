@@ -58,6 +58,49 @@ module.exports = function authModule(app, db) {
   // Utils
   const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
   const nowISO  = () => new Date().toISOString().slice(0,19).replace('T',' ');
+  // Gera um token de compra e salva em purchase_tokens
+async function issuePurchaseToken(issued_to_email, order_id, max_uses = 1, expires_at = null) {
+  const rawCode = crypto.randomBytes(24).toString('hex');
+  const code_hash = sha256(rawCode);
+
+  await run(
+    `INSERT INTO purchase_tokens (code_hash, issued_to_email, order_id, max_uses, expires_at)
+     VALUES (?,?,?,?,?)`,
+    [
+      code_hash,
+      issued_to_email || null,
+      order_id || null,
+      max_uses,
+      expires_at || null
+    ]
+  );
+
+  return rawCode;
+}
+
+  // ===== DEV: emitir token de compra manualmente (para testes) =====
+  app.get('/dev/issue-token', async (req, res) => {
+    // Em produção, você pode bloquear isso
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(404).end();
+    }
+
+    try {
+      const email = req.query.email || null;
+
+      const code = await issuePurchaseToken(email, 'dev-test-order', 1, null);
+
+      const link = `${APP_URL.replace(/\/$/, '')}/auth?token=${encodeURIComponent(code)}`;
+
+      res.json({
+        ok: true,
+        code, // token de compra (para colar manualmente se quiser)
+        link, // link pronto pra abrir a tela de cadastro
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message || 'issue_token_failed' });
+    }
+  });
 
   // JWT helper
   function sign(user) {
@@ -280,4 +323,5 @@ module.exports = function authModule(app, db) {
 
   // Exporta middleware
   app.authRequired = authRequired;
+  app.issuePurchaseToken = issuePurchaseToken;
 };

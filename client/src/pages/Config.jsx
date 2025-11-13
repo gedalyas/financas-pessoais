@@ -21,7 +21,6 @@ export default function Settings() {
 
   function notify(type, text) {
     setMsg({ type, text });
-    // limpa depois de alguns segundos
     setTimeout(() => setMsg(null), 4000);
   }
 
@@ -31,15 +30,17 @@ export default function Settings() {
       const res = await fetch(`${API_URL}/api/settings/me`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+
+      const data = await res.json().catch(() => ({}));
+
       if (res.status === 401) {
         notify('error', 'Sessão expirada. Faça login novamente.');
         return;
       }
       if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j?.error || 'Erro ao carregar perfil');
+        throw new Error(data?.error || 'Erro ao carregar perfil');
       }
-      const data = await res.json();
+
       setName(data.name || '');
       setEmail(data.email || '');
     } catch (e) {
@@ -71,7 +72,6 @@ export default function Settings() {
       if (!res.ok) {
         throw new Error(j?.error === 'invalid_name' ? 'Nome inválido.' : 'Falha ao salvar nome.');
       }
-      // atualiza cache local se você guarda pf_user
       try {
         const u = JSON.parse(localStorage.getItem('pf_user') || '{}');
         localStorage.setItem('pf_user', JSON.stringify({ ...u, name: name.trim() }));
@@ -212,23 +212,6 @@ export default function Settings() {
             {changingPass ? 'Alterando...' : 'Alterar senha'}
           </button>
         </div>
-      </div>
-      <div className="form">
-        <h2 className="page title" style={{ fontSize: 18 }}>Token Atual</h2>
-        <div className="form-grid">
-          <div>
-            <label className="helper">Token atual</label>
-            <input
-              className="input"
-              type="password"
-              value={currPass}
-              onChange={(e) => setCurrPass(e.target.value)}
-              placeholder="Seu token de autenticação"
-            />
-          </div>
-        </div>
-
-        
       </div>
     </div>
   );

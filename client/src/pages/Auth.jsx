@@ -1,12 +1,13 @@
 // client/src/pages/Auth.jsx
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import './auth.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 export default function AuthPage() {
   const nav = useNavigate();
+  const location = useLocation();
   const [tab, setTab] = useState('login');
 
   // login/register fields
@@ -14,7 +15,8 @@ export default function AuthPage() {
   const [name, setName]   = useState('');
   const [pass, setPass]   = useState('');
   const [pass2, setPass2] = useState('');
-  const [purchaseToken, setPurchaseToken] = useState(''); // << NOVO
+  const [purchaseToken, setPurchaseToken] = useState('');
+  const [tokenFromUrl, setTokenFromUrl] = useState('');
 
   // ui state
   const [show, setShow]   = useState(false);
@@ -25,7 +27,22 @@ export default function AuthPage() {
   const [fpOpen, setFpOpen] = useState(false);
   const [fpEmail, setFpEmail] = useState('');
   const [fpMsg, setFpMsg] = useState('');
-  const [fpLink, setFpLink] = useState(''); // guarda dev_link sem quebrar layout
+  const [fpLink, setFpLink] = useState('');
+
+  // 🔥 Preenche automaticamente o token vindo da URL
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const t =
+      params.get('token') ||
+      params.get('purchase_token') ||
+      '';
+
+    if (t) {
+      setPurchaseToken(t);
+      setTokenFromUrl(t);
+      setTab('register'); // já abre a aba de criar conta
+    }
+  }, [location.search]);
 
   function saveSession(token, profile) {
     localStorage.setItem('pf_token', token || '');
@@ -76,7 +93,7 @@ export default function AuthPage() {
           name,
           email,
           password: pass,
-          purchase_token: purchaseToken.trim(), // << ENVIA TOKEN
+          purchase_token: purchaseToken.trim(),
         })
       });
       const j = await res.json().catch(()=> ({}));
@@ -204,7 +221,7 @@ export default function AuthPage() {
               <input className="auth-input" type="password" value={pass2} onChange={(e)=>setPass2(e.target.value)} required />
             </label>
 
-            {/* NOVO: Token de compra */}
+            {/* Token de compra */}
             <label className="auth-field">
               <span>Token de compra</span>
               <input
@@ -213,7 +230,13 @@ export default function AuthPage() {
                 onChange={(e)=>setPurchaseToken(e.target.value)}
                 placeholder="Cole aqui o token recebido após a compra"
                 required
+                readOnly={!!tokenFromUrl}
               />
+              {tokenFromUrl && (
+                <small className="auth-info">
+                  O token foi preenchido automaticamente pelo link de acesso.
+                </small>
+              )}
             </label>
 
             {err && <div className="auth-error">⚠ {err}</div>}
