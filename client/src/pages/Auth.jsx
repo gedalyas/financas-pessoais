@@ -8,20 +8,42 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 export default function AuthPage() {
   const nav = useNavigate();
   const [tab, setTab] = useState('login');
+
+  // login/register fields
   const [email, setEmail] = useState('');
   const [name, setName]   = useState('');
   const [pass, setPass]   = useState('');
   const [pass2, setPass2] = useState('');
+  const [purchaseToken, setPurchaseToken] = useState(''); // << NOVO
+
+  // ui state
   const [show, setShow]   = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
-  const [fpOpen, setFpOpen] = useState(false);     // forgot password
+
+  // Forgot password
+  const [fpOpen, setFpOpen] = useState(false);
   const [fpEmail, setFpEmail] = useState('');
   const [fpMsg, setFpMsg] = useState('');
+  const [fpLink, setFpLink] = useState(''); // guarda dev_link sem quebrar layout
 
   function saveSession(token, profile) {
     localStorage.setItem('pf_token', token || '');
     if (profile) localStorage.setItem('pf_user', JSON.stringify(profile));
+  }
+
+  function mapErrorToMsg(code) {
+    const map = {
+      purchase_token_required: 'Informe o token de compra para concluir o cadastro.',
+      invalid_purchase_token:  'Token de compra inválido.',
+      token_revoked:           'Este token foi revogado.',
+      token_expired:           'Este token expirou.',
+      token_exhausted:         'Este token atingiu o limite de uso.',
+      token_email_mismatch:    'Este token está vinculado a outro e-mail.',
+      token_race_condition:    'Token já utilizado simultaneamente. Tente outro token.',
+      'E-mail já cadastrado.': 'E-mail já cadastrado.',
+    };
+    return map[code] || code || 'Falha ao criar conta';
   }
 
   async function onLogin(e) {
@@ -43,14 +65,25 @@ export default function AuthPage() {
     e.preventDefault();
     setErr('');
     if (pass !== pass2) { setErr('Senhas não conferem.'); return; }
+    if (!purchaseToken.trim()) { setErr('Informe o token de compra.'); return; }
+
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/auth/register`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password: pass })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          email,
+          password: pass,
+          purchase_token: purchaseToken.trim(), // << ENVIA TOKEN
+        })
       });
       const j = await res.json().catch(()=> ({}));
-      if (!res.ok) { setErr(j.error || 'Falha ao criar conta'); return; }
+      if (!res.ok) {
+        setErr(mapErrorToMsg(j.error));
+        return;
+      }
       saveSession(j.token, j.user);
       nav('/');
     } finally { setLoading(false); }
@@ -59,13 +92,18 @@ export default function AuthPage() {
   async function onForgot(e) {
     e.preventDefault();
     setFpMsg('Enviando…');
+    setFpLink('');
     const res = await fetch(`${API_URL}/api/auth/forgot`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: fpEmail })
     });
     const j = await res.json().catch(()=> ({}));
     if (res.ok) {
-      setFpMsg(j.dev_link ? `Link de redefinição (dev): ${j.dev_link}` : 'Se o e-mail existir, enviaremos um link de redefinição.');
+      setFpMsg(j.dev_link
+        ? 'Link de redefinição (modo dev) gerado abaixo.'
+        : 'Se o e-mail existir, enviaremos um link de redefinição.'
+      );
+      if (j.dev_link) setFpLink(j.dev_link);
     } else {
       setFpMsg(j.error || 'Falha ao solicitar redefinição.');
     }
@@ -119,13 +157,28 @@ export default function AuthPage() {
             </div>
 
             {fpOpen && (
-              <div className="auth-form" style={{marginTop:10, padding:10, borderRadius:12, border:'1px solid rgba(255,255,255,.08)'}}>
+              <div className="auth-form" style={{marginTop:10}}>
                 <div className="auth-field">
                   <span>Seu e-mail</span>
                   <input className="auth-input" type="email" value={fpEmail} onChange={(e)=>setFpEmail(e.target.value)} required />
                 </div>
                 <button className="auth-btn" onClick={onForgot} type="button">Enviar link de redefinição</button>
-                {fpMsg && <div className="auth-error" style={{background:'rgba(59,130,246,0.12)', borderColor:'rgba(59,130,246,0.35)', color:'#cfe8ff'}}>{fpMsg}</div>}
+
+                {fpMsg && <div className="auth-info">{fpMsg}</div>}
+
+                {fpLink && (
+                  <div className="dev-link" style={{marginTop:8, display:'flex', gap:8, alignItems:'center'}}>
+                    <code className="code-clip" title={fpLink}>{fpLink}</code>
+                    <button
+                      type="button"
+                      className="auth-btn"
+                      onClick={() => navigator.clipboard.writeText(fpLink)}
+                      style={{width:'auto', padding:'10px 12px'}}
+                    >
+                      Copiar
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </form>
@@ -150,6 +203,19 @@ export default function AuthPage() {
               <span>Confirmar senha</span>
               <input className="auth-input" type="password" value={pass2} onChange={(e)=>setPass2(e.target.value)} required />
             </label>
+
+            {/* NOVO: Token de compra */}
+            <label className="auth-field">
+              <span>Token de compra</span>
+              <input
+                className="auth-input"
+                value={purchaseToken}
+                onChange={(e)=>setPurchaseToken(e.target.value)}
+                placeholder="Cole aqui o token recebido após a compra"
+                required
+              />
+            </label>
+
             {err && <div className="auth-error">⚠ {err}</div>}
             <button className="auth-btn primary" disabled={loading}>{loading ? 'Criando…' : 'Criar conta'}</button>
           </form>

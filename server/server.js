@@ -336,17 +336,21 @@ async function migrateAddUserId(defaultUserId) {
 
 // Criação "fresh" do schema (caso DB novo)
 async function ensureSchemaFresh() {
+  // ===== USERS (alinhado com auth.js) =====
   await run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
-      name TEXT,
-      password_hash TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      reset_token TEXT,
+      reset_expires TEXT
     )
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
 
+  // ===== TRANSACTIONS =====
   await run(`
     CREATE TABLE IF NOT EXISTS transactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -361,6 +365,7 @@ async function ensureSchemaFresh() {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, date, id)`);
 
+  // ===== CATEGORIES =====
   await run(`
     CREATE TABLE IF NOT EXISTS categories (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -373,6 +378,7 @@ async function ensureSchemaFresh() {
   await run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_categories_user_name ON categories(user_id, name)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_categories_user ON categories(user_id)`);
 
+  // ===== RECURRENCES =====
   await run(`
     CREATE TABLE IF NOT EXISTS recurrences (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -393,6 +399,7 @@ async function ensureSchemaFresh() {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_recur_user_next ON recurrences(user_id, next_run, active)`);
 
+  // ===== GOALS =====
   await run(`
     CREATE TABLE IF NOT EXISTS goals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -409,6 +416,7 @@ async function ensureSchemaFresh() {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_goals_user_status ON goals(user_id, status)`);
 
+  // ===== GOAL CONTRIBUTIONS =====
   await run(`
     CREATE TABLE IF NOT EXISTS goal_contributions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -424,6 +432,7 @@ async function ensureSchemaFresh() {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_goal_contrib_user_goal_date ON goal_contributions(user_id, goal_id, date)`);
 
+  // ===== LIMITS =====
   await run(`
     CREATE TABLE IF NOT EXISTS limits (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -440,7 +449,24 @@ async function ensureSchemaFresh() {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_limits_user ON limits(user_id)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_limits_user_status ON limits(user_id, status)`);
+
+  // ===== PURCHASE TOKENS (convites/licenças) =====
+  await run(`
+    CREATE TABLE IF NOT EXISTS purchase_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code_hash TEXT NOT NULL,
+      issued_to_email TEXT,
+      order_id TEXT,
+      max_uses INTEGER NOT NULL DEFAULT 1,
+      used_count INTEGER NOT NULL DEFAULT 0,
+      expires_at TEXT,
+      revoked INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_pt_hash ON purchase_tokens(code_hash)`);
 }
+
 
 // Orquestra migrações (suporta bancos antigos)
 async function ensureMigrations() {
