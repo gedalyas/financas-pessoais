@@ -37,7 +37,8 @@ app.use('/api', app.authRequired, (req, _res, next) => {
 const mountSettings = require('./settings');
 mountSettings(app, db);
 
-
+const mountWebhooks = require('./webhooks');
+mountWebhooks(app, db);
 
 // ================ CORES / CATEGORIAS ================
 const PALETTE = [
