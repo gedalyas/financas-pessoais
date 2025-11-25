@@ -39,11 +39,20 @@ module.exports = function mountWebhooks(app, db) {
         },
       });
 
-      if (!mpRes.ok) {
+            if (!mpRes.ok) {
         const txt = await mpRes.text();
         console.error('[MP Webhook] Falha ao buscar pagamento:', mpRes.status, txt);
-        return res.status(500).json({ error: 'failed_to_fetch_payment' });
+
+        // Se for 404, provavelmente é notificação de teste ou pagamento removido.
+        if (mpRes.status === 404) {
+          console.log('[MP Webhook] Pagamento não encontrado (404). Tratando como teste/ignorado.');
+          return res.json({ ok: true, ignored: true, reason: 'payment_not_found' });
+        }
+
+        // Outros erros: loga e mesmo assim responde 200 para o MP não ficar re-tentando loucamente
+        return res.json({ ok: false, error: 'failed_to_fetch_payment' });
       }
+
 
       const payment = await mpRes.json();
       console.log('[MP Webhook] Payment details:', payment);
