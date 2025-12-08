@@ -45,6 +45,7 @@ router.post("/checkout/create", async (req, res) => {
     }
 
     const selectedPlan = PLANS[plan];
+    const isAvista = selectedPlan.id === "avista";
 
     // 🧾 Preferência Mercado Pago
     const preference = {
@@ -68,11 +69,20 @@ router.post("/checkout/create", async (req, res) => {
 
       external_reference: `${email}-${selectedPlan.id}-${Date.now()}`,
 
-      // ⚙️ Se você quiser controlar tipos de pagamento por plano, dá pra usar:
-      // payment_methods: {
-      //   excluded_payment_types: [],
-      //   installments: plan === "parcelado12x" ? 12 : 1, // máximo de parcelas
-      // },
+      // ⚙️ Configuração de formas de pagamento por plano
+      payment_methods: isAvista
+        ? {
+            // Plano à vista: não permite parcelar no cartão
+            installments: 1, // máximo 1x
+            // Se quiser, dá pra bloquear boleto também, etc.
+            // excluded_payment_types: [{ id: "ticket" }],
+          }
+        : {
+            // Plano 12x: permite parcelar até 12x no cartão
+            installments: 12,
+            // O usuário ainda pode escolher menos parcelas,
+            // mas nunca mais do que 12.
+          },
     };
 
     const response = await mercadopago.preferences.create(preference);

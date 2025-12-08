@@ -5,6 +5,8 @@ const cors = require('cors');
 const morgan = require('morgan');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const checkoutRoutes = require('./checkout');
+
 
 
 
@@ -14,10 +16,14 @@ app.use(cors());
 app.use(express.json());
 app.use(morgan('dev'));
 
+// 🔓 Rotas públicas (não exigem login)
+app.use('/api', checkoutRoutes); // <-- ADICIONADO
+
 const DB_FILE = path.join(__dirname, 'db.sqlite');
 const db = new sqlite3.Database(DB_FILE, (err) => {
   if (err) console.error('Erro ao abrir DB:', err);
 });
+
 
 // Habilita FKs no SQLite
 db.serialize(() => {
@@ -86,7 +92,7 @@ function normalizeStr(s) {
     .toLowerCase().trim().replace(/\s+/g, '');
 }
 function isHexColor(v) { return /^#[0-9A-Fa-f]{6}$/.test(String(v || '')); }
-function hash32(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h*31 + s.charCodeAt(i)) >>> 0; return h >>> 0; }
+function hash32(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h >>> 0; }
 function pickColor(name) { return PALETTE[hash32(String(name || '')) % PALETTE.length]; }
 
 function parseColor(colorInput, categoryName) {
@@ -107,18 +113,18 @@ function todayLocalISO() {
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 10);
 }
-function addDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+function addDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
 function addMonthsClamp(iso, n) {
   const d = new Date(iso + 'T00:00:00');
   const day = d.getDate();
-  d.setMonth(d.getMonth()+n, 1);
-  const last = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+  d.setMonth(d.getMonth() + n, 1);
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
   d.setDate(Math.min(day, last));
-  return d.toISOString().slice(0,10);
+  return d.toISOString().slice(0, 10);
 }
 function advance(iso, freq, interval) {
   if (freq === 'daily') return addDays(iso, interval);
-  if (freq === 'weekly') return addDays(iso, 7*interval);
+  if (freq === 'weekly') return addDays(iso, 7 * interval);
   return addMonthsClamp(iso, interval); // monthly
 }
 function computeInitialNextRun(start_date, freq, interval, end_date) {
@@ -134,19 +140,19 @@ function computeInitialNextRun(start_date, freq, interval, end_date) {
 
 // Durações de limites
 const LIMIT_DURATIONS = {
-  '1d': { type: 'days',   n: 1,  label: '1 dia' },
-  '1w': { type: 'days',   n: 7,  label: '1 semana' },
-  '2w': { type: 'days',   n: 14, label: '2 semanas' },
-  '1m': { type: 'months', n: 1,  label: '1 mês' },
-  '2m': { type: 'months', n: 2,  label: '2 meses' },
-  '4m': { type: 'months', n: 4,  label: '4 meses' },
-  '6m': { type: 'months', n: 6,  label: '6 meses' },
+  '1d': { type: 'days', n: 1, label: '1 dia' },
+  '1w': { type: 'days', n: 7, label: '1 semana' },
+  '2w': { type: 'days', n: 14, label: '2 semanas' },
+  '1m': { type: 'months', n: 1, label: '1 mês' },
+  '2m': { type: 'months', n: 2, label: '2 meses' },
+  '4m': { type: 'months', n: 4, label: '4 meses' },
+  '6m': { type: 'months', n: 6, label: '6 meses' },
   '1y': { type: 'months', n: 12, label: '1 ano' },
 };
 function computeLimitEnd(startISO, durationCode) {
   const d = LIMIT_DURATIONS[durationCode];
   if (!d) return startISO;
-  if (d.type === 'days')   return addDays(startISO, d.n - 1); // inclusivo
+  if (d.type === 'days') return addDays(startISO, d.n - 1); // inclusivo
   // meses: avança N meses e volta 1 dia para inclusivo
   const afterNMonths = addMonthsClamp(startISO, d.n);
   return addDays(afterNMonths, -1);
@@ -198,9 +204,9 @@ async function ensureCategory(userId, name) {
   const parsed = parseColor(undefined, name); // cor automática
   await run(`INSERT INTO categories (user_id, name, color) VALUES (?, ?, ?)`, [userId, name, parsed.color]);
 }
-async function goalExists(userId, id) { 
-  const row = await get(`SELECT 1 FROM goals WHERE user_id = ? AND id = ?`, [userId, id]); 
-  return !!row; 
+async function goalExists(userId, id) {
+  const row = await get(`SELECT 1 FROM goals WHERE user_id = ? AND id = ?`, [userId, id]);
+  return !!row;
 }
 
 // 🔹 Cria categorias padrão na 1ª visita de cada usuário
@@ -261,7 +267,7 @@ async function addColumnIfMissing(table, column, definition) {
   if (!has) {
     try {
       await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-    } catch (_) {}
+    } catch (_) { }
   }
 }
 async function tableHasColumn(table, column) {
@@ -497,11 +503,7 @@ ensureMigrations().catch((e) => console.error('Falha em migrações:', e));
 // ================ PING ================
 app.get('/', (_req, res) => res.send('API OK'));
 
-// ================ MIDDLEWARE DE ROTAS PROTEGIDAS ================
-app.use('/api', app.authRequired, (req, _res, next) => {
-  req.authUserId = req.user.id;
-  next();
-});
+
 
 // ================ CATEGORIAS (CRUD) ================
 app.get('/api/categories', async (req, res) => {
@@ -606,9 +608,9 @@ app.get('/api/transactions', async (req, res) => {
     const params = [uid];
 
     if (from) { where.push('t.date >= ?'); params.push(from); }
-    if (to)   { where.push('t.date <= ?'); params.push(to); }
+    if (to) { where.push('t.date <= ?'); params.push(to); }
     if (category) { where.push('t.category = ?'); params.push(category); }
-    if (type)     { where.push('t.type = ?'); params.push(type); }
+    if (type) { where.push('t.type = ?'); params.push(type); }
 
     const sql = `
       SELECT t.*, COALESCE(c.color, '#64748b') AS category_color
@@ -683,7 +685,7 @@ app.get('/api/summary', async (req, res) => {
     const where = ['t.user_id = ?'];
     const params = [uid];
     if (from) { where.push('t.date >= ?'); params.push(from); }
-    if (to)   { where.push('t.date <= ?'); params.push(to); }
+    if (to) { where.push('t.date <= ?'); params.push(to); }
 
     const totals = await get(
       `
@@ -721,7 +723,7 @@ app.get('/api/summary', async (req, res) => {
 });
 
 // ================ RECORRÊNCIAS (CRUD + PROCESSADOR) ================
-const VALID_FREQ = new Set(['daily','weekly','monthly']);
+const VALID_FREQ = new Set(['daily', 'weekly', 'monthly']);
 
 app.get('/api/recurrences', async (req, res) => {
   try {
@@ -761,7 +763,7 @@ app.post('/api/recurrences', async (req, res) => {
     if (!description || !category || !type || !Number.isFinite(amt) || !start_date || !VALID_FREQ.has(frequency)) {
       return res.status(400).json({ error: 'Campos obrigatórios: description, category, type, amount, frequency (daily|weekly|monthly), start_date.' });
     }
-    if (!['income','expense'].includes(type)) return res.status(400).json({ error: "type deve ser 'income' ou 'expense'." });
+    if (!['income', 'expense'].includes(type)) return res.status(400).json({ error: "type deve ser 'income' ou 'expense'." });
     if (!(interval >= 1 && Number.isInteger(interval))) return res.status(400).json({ error: 'interval deve ser inteiro >= 1.' });
 
     const next_run = computeInitialNextRun(start_date, frequency, interval, end_date);
@@ -797,7 +799,7 @@ app.patch('/api/recurrences/:id', async (req, res) => {
     }
     if (req.body.type !== undefined) {
       fields.type = String(req.body.type).trim();
-      if (!['income','expense'].includes(fields.type)) return res.status(400).json({ error: "type deve ser 'income' ou 'expense'." });
+      if (!['income', 'expense'].includes(fields.type)) return res.status(400).json({ error: "type deve ser 'income' ou 'expense'." });
     }
     if (req.body.amount !== undefined) {
       const amt = typeof req.body.amount === 'number' ? req.body.amount : parseFloat(String(req.body.amount).replace(',', '.'));
@@ -834,9 +836,9 @@ app.patch('/api/recurrences/:id', async (req, res) => {
       }
     }
 
-    for (const [k,v] of Object.entries(fields)) { set.push(`${k} = ?`); params.push(v); }
+    for (const [k, v] of Object.entries(fields)) { set.push(`${k} = ?`); params.push(v); }
 
-    const nextDependencies = ['frequency','interval','start_date','end_date'];
+    const nextDependencies = ['frequency', 'interval', 'start_date', 'end_date'];
     if (nextDependencies.some(k => fields[k] !== undefined)) {
       const freq = fields.frequency ?? current.frequency;
       const intv = fields.interval ?? current.interval;
@@ -977,9 +979,9 @@ async function processRecurrences(onlyId = null, onlyUserId = null) {
 }
 
 // agenda a cada 60s para rodar GLOBALMENTE (todos os usuários)
-setInterval(() => { processRecurrences().catch(() => {}); }, 60 * 1000);
+setInterval(() => { processRecurrences().catch(() => { }); }, 60 * 1000);
 // roda na inicialização
-processRecurrences().catch(() => {});
+processRecurrences().catch(() => { });
 
 // ================ METAS (GOALS) ================
 function monthsBetween(startISO, endISO) {
@@ -1277,8 +1279,8 @@ app.get('/api/limits', async (req, res) => {
       let phase = 'scheduled';
       if (l.status !== 'active') phase = l.status; // paused / archived
       else if (today < l.start_date) phase = 'scheduled';
-      else if (today > l.end_date)   phase = 'expired';
-      else                           phase = 'running';
+      else if (today > l.end_date) phase = 'expired';
+      else phase = 'running';
 
       enriched.push({ ...l, spent, remaining, percent, phase });
     }
@@ -1310,7 +1312,7 @@ app.post('/api/limits', async (req, res) => {
     if (!start_date) return res.status(400).json({ error: 'start_date é obrigatório.' });
     if (!LIMIT_DURATIONS[duration_code]) return res.status(400).json({ error: 'duration_code inválido.' });
     if (!Number.isFinite(max_amount) || max_amount <= 0) return res.status(400).json({ error: 'max_amount inválido.' });
-    if (!['active','paused','archived'].includes(status)) return res.status(400).json({ error: 'status inválido.' });
+    if (!['active', 'paused', 'archived'].includes(status)) return res.status(400).json({ error: 'status inválido.' });
 
     const end_date = computeLimitEnd(start_date, duration_code);
     const st = await run(
@@ -1361,7 +1363,7 @@ app.patch('/api/limits/:id', async (req, res) => {
     }
     if (req.body.status !== undefined) {
       const st = String(req.body.status).trim();
-      if (!['active','paused','archived'].includes(st)) return res.status(400).json({ error: 'status inválido.' });
+      if (!['active', 'paused', 'archived'].includes(st)) return res.status(400).json({ error: 'status inválido.' });
       set.push('status = ?'); params.push(st);
     }
 
