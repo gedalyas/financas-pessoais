@@ -140,32 +140,45 @@ const Pricing = () => {
           </div>
         </div>
 
-        {/* Campo de e-mail único */}
-        <div className="max-w-md mx-auto mb-8">
+        {/* Campo de e-mail */}
+        <div className="max-w-md mx-auto mb-10">
           <ScrollReveal>
-            <div className="space-y-2 text-center">
-              <label className="block text-sm font-medium text-foreground">
-                Seu melhor e-mail
+            <div className="relative rounded-2xl border border-primary/20 bg-gradient-to-b from-background to-secondary/20 p-5 shadow-md transition-all focus-within:shadow-xl focus-within:border-primary/40">
+
+              <label className="block text-sm font-semibold text-foreground mb-2 text-center">
+                Informe seu melhor e-mail para receber o acesso
               </label>
-              <input
-                type="email"
-                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1"
-                placeholder="seuemail@exemplo.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                É por esse e-mail que você receberá o link de acesso e o token
-                exclusivo após a confirmação do pagamento.
+
+              <div className="relative">
+                <input
+                  type="email"
+                  className={`
+            w-full h-12 rounded-xl border bg-background px-4 text-sm outline-none
+            transition-all
+            focus-visible:ring-2 focus-visible:ring-primary
+            focus-visible:border-primary
+            ${error ? "border-destructive focus-visible:ring-destructive" : "border-border"}
+          `}
+                  placeholder="seuemail@exemplo.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
+
+              <p className="mt-3 text-xs text-muted-foreground text-center leading-relaxed">
+                Esse e-mail será usado <span className="font-medium text-foreground">apenas</span> para enviar
+                o link de acesso e seu token exclusivo após a confirmação do pagamento.
               </p>
             </div>
           </ScrollReveal>
+
           {error && (
-            <p className="text-sm text-destructive text-center mt-3">
+            <p className="mt-3 text-sm text-destructive text-center animate-in fade-in">
               {error}
             </p>
           )}
         </div>
+
 
         <div className="max-w-3xl mx-auto">
           {plans.map((plan) => (

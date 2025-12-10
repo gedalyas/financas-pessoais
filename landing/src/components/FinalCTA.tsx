@@ -3,8 +3,10 @@ import { ArrowRight, TrendingUp } from "lucide-react";
 import { ScrollReveal } from "@/components/ScrollReveal";
 
 const FinalCTA = () => {
-  const scrollToTop = () => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  const scrollToPricing = () => {
+    document
+      .getElementById("pricing")
+      ?.scrollIntoView({ behavior: "smooth" });
   };
 
   return (
@@ -16,31 +18,34 @@ const FinalCTA = () => {
           <div className="max-w-4xl mx-auto text-center space-y-8">
             <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm px-6 py-3 rounded-full">
               <TrendingUp className="w-5 h-5" />
-              <span className="font-semibold">Uma nota de 10 paga sua transformação financeira</span>
+              <span className="font-semibold">
+                Um único pagamento para organizar suas finanças de vez
+              </span>
             </div>
 
             <h2 className="text-4xl md:text-6xl font-bold leading-tight">
               Começar agora por apenas{" "}
               <span className="text-white underline decoration-4 underline-offset-8 whitespace-nowrap">
-                R$ 9,99
+                R$ 49,99
               </span>
             </h2>
 
             <p className="text-xl md:text-2xl opacity-95 max-w-2xl mx-auto">
-              E dar o primeiro passo rumo ao controle total das suas finanças
+              Pagamento único, com opção de parcelar em até 2x no cartão
+              e o acesso à plataforma é seu.
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center pt-4">
               <Button 
                 size="lg"
-                onClick={scrollToTop}
+                onClick={scrollToPricing}
                 className="h-14 px-8 bg-white text-primary hover:bg-white/90 font-bold text-lg shadow-2xl hover:scale-105 transition-all"
               >
                 Quero Começar Agora
                 <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
               <p className="text-sm opacity-90">
-                ✓ Acesso imediato • ✓ Sem renovação automática • ✓ Suporte incluído
+                ✓ Pagamento único • ✓ Até 2x no cartão • ✓ Acesso imediato • ✓ Sem renovação automática
               </p>
             </div>
 
