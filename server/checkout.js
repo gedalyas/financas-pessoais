@@ -4,85 +4,53 @@ const mercadopago = require("mercadopago");
 
 const router = express.Router();
 
-// ⚙️ Mercado Pago
+// Mercado Pago
 mercadopago.configure({
   access_token: process.env.MP_ACCESS_TOKEN,
 });
 
-// 💰 Planos disponíveis
-// planId que vamos usar no front: "avista" e "parcelado12x"
-const PLANS = {
-  avista: {
-    id: "avista",
-    title: "Prospera Finanças - Plano à vista",
-    // 49,99 à vista (PIX / débito / 1x crédito)
-    price: 49.99,
-  },
-  parcelado12x: {
-    id: "parcelado12x",
-    title: "Prospera Finanças - Plano 12x de 9,99",
-    // total = 12 x 9,99 = 119,88
-    price: 9.99 * 12,
-  },
+// ÚNICO PLANO
+const PLAN = {
+  id: "plano49",
+  title: "Prospera Finanças - Acesso Completo",
+  price: 1,
 };
 
 /**
  * POST /api/checkout/create
- * Body: { email: string, plan: "avista" | "parcelado12x" }
+ * Body: { email: string }
  */
 router.post("/checkout/create", async (req, res) => {
   try {
-    const { email, plan } = req.body;
+    const { email } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: "Email é obrigatório." });
     }
 
-    if (!plan || !PLANS[plan]) {
-      return res
-        .status(400)
-        .json({ error: "Plano inválido. Use 'avista' ou 'parcelado12x'." });
-    }
-
-    const selectedPlan = PLANS[plan];
-    const isAvista = selectedPlan.id === "avista";
-
-    // 🧾 Preferência Mercado Pago
     const preference = {
       items: [
         {
-          title: selectedPlan.title,
+          title: PLAN.title,
           quantity: 1,
           currency_id: "BRL",
-          unit_price: Number(selectedPlan.price),
+          unit_price: PLAN.price,
         },
       ],
 
-      // 👇 URL pública do webhook (Cloudflare Tunnel ou domínio)
       notification_url: process.env.MP_WEBHOOK_URL,
 
-      // Vai chegar no webhook depois:
       metadata: {
         email,
-        plan: selectedPlan.id,
+        plan: PLAN.id,
       },
 
-      external_reference: `${email}-${selectedPlan.id}-${Date.now()}`,
+      external_reference: `${email}-${PLAN.id}-${Date.now()}`,
 
-      // ⚙️ Configuração de formas de pagamento por plano
-      payment_methods: isAvista
-        ? {
-            // Plano à vista: não permite parcelar no cartão
-            installments: 1, // máximo 1x
-            // Se quiser, dá pra bloquear boleto também, etc.
-            // excluded_payment_types: [{ id: "ticket" }],
-          }
-        : {
-            // Plano 12x: permite parcelar até 12x no cartão
-            installments: 12,
-            // O usuário ainda pode escolher menos parcelas,
-            // mas nunca mais do que 12.
-          },
+      payment_methods: {
+        installments: 2,          // ✅ no máximo 2x
+        default_installments: 1,  // ✅ abre em 1x por padrão
+      },
     };
 
     const response = await mercadopago.preferences.create(preference);
@@ -92,10 +60,8 @@ router.post("/checkout/create", async (req, res) => {
       sandbox_init_point: response.body.sandbox_init_point,
     });
   } catch (error) {
-    console.error("[Checkout] Erro ao criar preferência:", error);
-    return res
-      .status(500)
-      .json({ error: "Erro ao criar checkout. Tente novamente mais tarde." });
+    console.error("[Checkout] Erro:", error);
+    return res.status(500).json({ error: "Erro ao criar checkout." });
   }
 });
 

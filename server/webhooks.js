@@ -8,6 +8,11 @@ module.exports = function mountWebhooks(app, db) {
 
   const APP_URL = process.env.APP_URL || "http://localhost:5173";
   const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN || ""; // coloque seu access token no .env
+  // Healthcheck simples pro botão "Testar URL" do Mercado Pago
+  router.get('/mercadopago', (req, res) => {
+    console.log('[MP Webhook] GET de teste recebido do Mercado Pago');
+    return res.json({ ok: true, message: 'Webhook Mercadopago ativo' });
+  });
 
   // Webhook do Mercado Pago
   router.post("/mercadopago", async (req, res) => {
@@ -120,12 +125,10 @@ module.exports = function mountWebhooks(app, db) {
 
         // usa o helper que você já exportou em auth.js
         // Se o 4º parâmetro for algo como "plano" ou "metadados", você pode passar o plan aqui.
-        const code = await app.issuePurchaseToken(
-          email,
-          externalRef,
-          1,
-          planFromMetadata || null
-        );
+        // Gera token de compra SEM expiração automática (max_uses = 1)
+        const code = await app.issuePurchaseToken(email, externalRef);
+        // max_uses cai no default = 1, expires_at = null
+
 
         const linkCadastro = `${APP_URL.replace(
           /\/$/,

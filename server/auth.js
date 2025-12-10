@@ -175,7 +175,7 @@ async function issuePurchaseToken(issued_to_email, order_id, max_uses = 1, expir
     return { ok: true, token_id: row.id };
   }
 
-  // (Opcional) Endpoint para validar token antes de criar a conta
+  /*// (Opcional) Endpoint para validar token antes de criar a conta
   app.post('/api/auth/verify-token', async (req, res) => {
     try {
       const { email, purchase_token } = req.body || {};
@@ -186,7 +186,7 @@ async function issuePurchaseToken(issued_to_email, order_id, max_uses = 1, expir
     } catch (e) {
       return res.status(e.status || 400).json({ error: e.error || 'invalid_token' });
     }
-  });
+  });*/
 
   // ===== REGISTER (requer token de compra)
   app.post('/api/auth/register', async (req, res) => {
