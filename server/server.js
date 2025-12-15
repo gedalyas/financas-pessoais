@@ -8,9 +8,6 @@ const path = require('path');
 const checkoutRoutes = require('./checkout');
 
 
-
-
-
 const app = express();
 app.use(cors());
 app.use(express.json());
