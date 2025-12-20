@@ -9,14 +9,21 @@ const checkoutRoutes = require('./checkout');
 
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: [
+    "https://app.prosperafinancas.com",
+    "https://prosperafinancas.com"
+  ],
+  credentials: true
+}));
+
 app.use(express.json());
 app.use(morgan('dev'));
 
 // 🔓 Rotas públicas (não exigem login)
 app.use('/api', checkoutRoutes); // <-- ADICIONADO
 
-const DB_FILE = path.join(__dirname, 'db.sqlite');
+const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'db.sqlite');
 const db = new sqlite3.Database(DB_FILE, (err) => {
   if (err) console.error('Erro ao abrir DB:', err);
 });
