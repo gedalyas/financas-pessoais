@@ -7,7 +7,7 @@ const nodemailer = require('nodemailer');
 module.exports = function authModule(app, db) {
   const JWT_SECRET  = process.env.JWT_SECRET  || 'dev-secret-change';
   const JWT_EXPIRES = process.env.JWT_EXPIRES || '7d';
-  const APP_URL     = process.env.APP_URL     || 'http://localhost:5173';
+  const APP_URL     = process.env.APP_URL     || 'https://app.prosperafinancas.com';
 
   // SMTP opcional
   let transporter = null;
