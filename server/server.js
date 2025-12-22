@@ -9,13 +9,26 @@ const checkoutRoutes = require('./checkout');
 
 
 const app = express();
+const cors = require("cors");
+
+const allowedOrigins = [
+  "https://app.prosperafinancas.com",
+  "https://prosperafinancas.com",
+  "https://financas-pessoais-three.vercel.app", // enquanto seu front estiver nesse domínio
+];
+
 app.use(cors({
-  origin: [
-    "https://app.prosperafinancas.com",
-    "https://prosperafinancas.com"
-  ],
-  credentials: true
+  origin: allowedOrigins,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 }));
+
+app.options("*", cors());
+
+
+// Responder preflight
+app.options("*", cors());
+
 
 app.use(express.json());
 app.use(morgan('dev'));
