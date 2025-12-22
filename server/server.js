@@ -9,24 +9,44 @@ const checkoutRoutes = require('./checkout');
 
 const app = express();
 
-const allowedOrigins = [
+const allowedOrigins = new Set([
   "https://app.prosperafinancas.com",
   "https://prosperafinancas.com",
-  "https://financas-pessoais-three.vercel.app", // enquanto o front estiver nesse domínio
-];
+  "https://financas-pessoais-three.vercel.app",
+]);
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true); // Render / Postman / health checks
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("Not allowed by CORS"));
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // Render / Postman / health checks
+
+  // Libera exatamente os permitidos
+  if (allowedOrigins.has(origin)) return true;
+
+  // Libera QUALQUER subdomínio do Vercel (preview deployments)
+  // ex: https://financas-pessoais-three-git-main-xxxx.vercel.app
+  try {
+    const { hostname } = new URL(origin);
+    if (hostname.endsWith(".vercel.app")) return true;
+  } catch (_) { }
+
+  return false;
+}
+
+const corsOptions = {
+  origin: (origin, cb) => {
+    // DEBUG (opcional): veja qual origin está chegando
+    console.log("[CORS] origin:", origin);
+
+    if (isAllowedOrigin(origin)) return cb(null, true);
+    return cb(null, false); // importante: NÃO jogar erro (senão vira “CORS error” genérico)
   },
+  credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true,
-}));
+};
 
-app.options("*", cors());
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+
 
 app.use(express.json());
 app.use(morgan('dev'));
