@@ -1,40 +1,38 @@
 // server.js — API de Finanças Pessoais (multiusuário: categorias + transações + recorrentes + metas + limites)
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
+const cors = require('cors'); // ✅ apenas UMA vez
 const morgan = require('morgan');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const checkoutRoutes = require('./checkout');
 
-
 const app = express();
-const cors = require("cors");
 
 const allowedOrigins = [
   "https://app.prosperafinancas.com",
   "https://prosperafinancas.com",
-  "https://financas-pessoais-three.vercel.app", // enquanto seu front estiver nesse domínio
+  "https://financas-pessoais-three.vercel.app", // enquanto o front estiver nesse domínio
 ];
 
 app.use(cors({
-  origin: allowedOrigins,
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // Render / Postman / health checks
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("Not allowed by CORS"));
+  },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
 }));
 
 app.options("*", cors());
-
-
-// Responder preflight
-app.options("*", cors());
-
 
 app.use(express.json());
 app.use(morgan('dev'));
 
 // 🔓 Rotas públicas (não exigem login)
-app.use('/api', checkoutRoutes); // <-- ADICIONADO
+app.use('/api', checkoutRoutes);
 
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'db.sqlite');
 const db = new sqlite3.Database(DB_FILE, (err) => {
