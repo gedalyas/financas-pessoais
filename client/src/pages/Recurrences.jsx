@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import ConfirmDialog from '../ui/ConfirmDialog';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.prosperafinancas.com';
 
 // Adiciona Authorization em todas as chamadas autenticadas
 const authHeaders = () => {

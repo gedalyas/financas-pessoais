@@ -4,7 +4,7 @@ import CategoriesPanel from '../CategoriesPanel';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import CategoryDialog from '../ui/CategoryDialog';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.prosperafinancas.com';
 
 // Adiciona Authorization em todas as chamadas autenticadas
 const authHeaders = () => {

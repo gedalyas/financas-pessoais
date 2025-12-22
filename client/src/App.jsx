@@ -10,7 +10,7 @@ import AuthPage from './pages/Auth';
 import ResetPasswordPage from './pages/ResetPassword';
 import LimitsPage from './pages/Limits';
 import InvestPage from './pages/invest';
-import Config from './pages/config';
+import Config from './pages/Config';
 
 function isAuthed() {
   return Boolean(localStorage.getItem('pf_token'));
@@ -88,8 +88,8 @@ export default function App() {
           <Route path="/recorrentes" element={<RecurrencesPage />} />
           <Route path="/metas" element={<GoalsPage />} />
           <Route path="/limites" element={<LimitsPage />} />
-          <Route path="/invest" element={<InvestPage />} />
-          <Route path="/settings" element={<Config />} />
+          <Route path="/investimentos" element={<InvestPage />} />
+          <Route path="/configuracoes" element={<Config />} />
         </Route>
       </Route>
 

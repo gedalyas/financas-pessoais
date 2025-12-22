@@ -1,7 +1,7 @@
 // client/src/pages/Settings.jsx
 import React, { useEffect, useState } from 'react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.prosperafinancas.com';
 
 export default function Settings() {
   const [loading, setLoading] = useState(true);

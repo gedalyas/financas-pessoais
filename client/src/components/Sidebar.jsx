@@ -41,10 +41,10 @@ export default function Sidebar({ open = false, onClose }) {
         <NavLink to="/limites" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
           💳 Limites
         </NavLink>
-        <NavLink to="/invest" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
+        <NavLink to="/investimentos" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
           💰 Investimentos
         </NavLink>
-        <NavLink to="/settings" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
+        <NavLink to="/configuracoes" className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} onClick={closeOnClick}>
           ⚙️ Configurações
         </NavLink>
 
