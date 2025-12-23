@@ -81,7 +81,27 @@ const db = new sqlite3.Database(DB_FILE, (err) => {
 db.serialize(() => {
   db.run('PRAGMA foreign_keys = ON');
   db.run('PRAGMA journal_mode = WAL'); // melhor concorrência
+
+  // 🔎 DEBUG DO SCHEMA / USUÁRIOS
+  db.all(
+    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+    [],
+    (err, tables) => {
+      if (err) return console.error("[DB] erro listando tabelas:", err.message);
+      console.log("[DB] tabelas:", tables.map(t => t.name));
+    }
+  );
+
+  db.get(
+    "SELECT COUNT(*) AS n FROM users",
+    [],
+    (err, row) => {
+      if (err) return console.error("[DB] users count erro:", err.message);
+      console.log("[DB] users count:", row?.n);
+    }
+  );
 });
+
 
 // ================ AUTH ================
 const mountAuth = require('./auth');
