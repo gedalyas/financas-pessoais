@@ -59,7 +59,7 @@ const Pricing = () => {
 
       setLoading(true);
 
-      const res = await fetch(`${API_BASE_URL}/checkout/create`, {
+      const res = await fetch(`${API_BASE_URL}/api/checkout/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // ✅ agora só enviamos o email, um único plano no backend
