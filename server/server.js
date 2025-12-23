@@ -128,7 +128,7 @@ app.post("/api/admin/reset-password", requireAdmin, (req, res) => {
 
   const hash = bcrypt.hashSync(String(newPassword), 10);
 
-  db.run("UPDATE users SET password = ? WHERE email = ?", [hash, email], function (err) {
+  db.run("UPDATE users SET password_hash = ? WHERE email = ?", [hash, email], function (err) {
     if (err) return res.status(500).json({ error: err.message });
     if (this.changes === 0) return res.status(404).json({ error: "User not found" });
     res.json({ ok: true, email });
