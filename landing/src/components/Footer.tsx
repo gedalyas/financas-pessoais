@@ -47,8 +47,19 @@ const Footer = () => {
 
         <div className="border-t border-background/20 pt-8 flex flex-col md:flex-row justify-between items-center gap-4 text-sm opacity-80">
           <p>&copy; 2025 Prospera Finanças Tecnológicas. Todos os direitos reservados.</p>
-          <p>Desenvolvido com 🧡 para brasileiros</p>
+          <p className="text-sm mt-2">
+              Produzido por{" "}
+              <a
+                href="https://www.davisouto.dev/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary font-medium hover:underline"
+              >
+                Davi Souto
+              </a>{" "}
+            </p>
         </div>
+        
       </div>
     </footer>
   );
