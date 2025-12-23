@@ -54,10 +54,27 @@ app.use(morgan('dev'));
 // 🔓 Rotas públicas (não exigem login)
 app.use('/api', checkoutRoutes);
 
-const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'db.sqlite');
+// 🔎 DEBUG DO BANCO (TEMPORÁRIO)
+const fs = require("fs");
+
+const DB_FILE = process.env.DB_FILE || path.join(__dirname, "db.sqlite");
+
+console.log("=== DB DEBUG ===");
+console.log("DB_FILE env:", process.env.DB_FILE);
+console.log("Resolved DB_FILE:", DB_FILE);
+console.log("Exists?", fs.existsSync(DB_FILE));
+if (fs.existsSync(DB_FILE)) {
+  const st = fs.statSync(DB_FILE);
+  console.log("Size(bytes):", st.size);
+  console.log("Last modified:", st.mtime);
+}
+console.log("===============");
+
+// 🗄️ ABERTURA DO SQLITE
 const db = new sqlite3.Database(DB_FILE, (err) => {
-  if (err) console.error('Erro ao abrir DB:', err);
+  if (err) console.error("Erro ao abrir DB:", err);
 });
+
 
 
 // Habilita FKs no SQLite
