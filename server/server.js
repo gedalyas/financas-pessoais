@@ -5,6 +5,7 @@ const cors = require('cors'); // ✅ apenas UMA vez
 const morgan = require('morgan');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const bcrypt = require("bcryptjs");
 const checkoutRoutes = require('./checkout');
 
 const app = express();
@@ -50,6 +51,7 @@ app.options("*", cors(corsOptions));
 
 app.use(express.json());
 app.use(morgan('dev'));
+
 
 // 🔓 Rotas públicas (não exigem login)
 app.use('/api', checkoutRoutes);
@@ -101,7 +103,37 @@ db.serialize(() => {
     }
   );
 });
+const ADMIN_KEY = process.env.ADMIN_KEY;
 
+function requireAdmin(req, res, next) {
+  const key = req.header("x-admin-key");
+  if (!ADMIN_KEY || key !== ADMIN_KEY) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+}
+
+app.get("/api/admin/users", requireAdmin, (req, res) => {
+  db.all("SELECT id, email FROM users ORDER BY id DESC LIMIT 50", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ users: rows });
+  });
+});
+
+app.post("/api/admin/reset-password", requireAdmin, (req, res) => {
+  const { email, newPassword } = req.body || {};
+  if (!email || !newPassword) {
+    return res.status(400).json({ error: "email and newPassword required" });
+  }
+
+  const hash = bcrypt.hashSync(String(newPassword), 10);
+
+  db.run("UPDATE users SET password = ? WHERE email = ?", [hash, email], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) return res.status(404).json({ error: "User not found" });
+    res.json({ ok: true, email });
+  });
+});
 
 // ================ AUTH ================
 const mountAuth = require('./auth');
