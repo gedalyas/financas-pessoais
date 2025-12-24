@@ -13,7 +13,7 @@ mercadopago.configure({
 const PLAN = {
   id: "plano49",
   title: "Prospera Finanças - Acesso Completo",
-  price: 1,
+  price: 49.99,
 };
 
 /**
