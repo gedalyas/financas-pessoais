@@ -52,6 +52,12 @@ app.options("*", cors(corsOptions));
 app.use(express.json());
 app.use(morgan('dev'));
 
+app.use((req, _res, next) => {
+  if (req.path.includes("checkout")) {
+    console.log("[REQ]", req.method, req.originalUrl, "| origin:", req.headers.origin);
+  }
+  next();
+});
 
 // 🔓 Rotas públicas (não exigem login)
 app.use('/api', checkoutRoutes);
