@@ -13,6 +13,7 @@ const app = express();
 const allowedOrigins = new Set([
   "https://app.prosperafinancas.com",
   "https://prosperafinancas.com",
+  "https://www.prosperafinancas.com",
   "https://financas-pessoais-three.vercel.app",
 ]);
 
