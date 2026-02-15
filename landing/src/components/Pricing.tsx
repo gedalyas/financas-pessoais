@@ -22,7 +22,7 @@ const plans = [
     name: "Acesso Completo",
     price: "49,99",
     period: "pagamento único (até 2x no cartão)",
-    description: "Acesso vitalício à plataforma Prospera Finanças",
+    description: "Acesso anual à plataforma Prospera Finanças",
     features: commonFeatures,
     highlight: true as const,
     badge: "Menos de R$ 5/mês na prática",
