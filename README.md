@@ -1,15 +1,18 @@
 <div align="center">
 
-# 🏠 JVR Imóveis
+# 💰 Prospera Finanças
 
-**Plataforma imobiliária em produção, desenvolvida para cliente real.**
+**SaaS de controle financeiro pessoal — do orçamento ao recebimento automático.**
 
-[![Ver site no ar](https://img.shields.io/badge/🔗_Ver_site_no_ar-06B6D4?style=for-the-badge&logoColor=white)](https://www.jvrimoveis.com.br/)
+[![Acessar aplicação](https://img.shields.io/badge/🔗_Acessar_aplicação-06B6D4?style=for-the-badge&logoColor=white)](https://financas-pessoais-teal.vercel.app)
 
-![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat-square&logo=nextdotjs&logoColor=white)
+![React](https://img.shields.io/badge/React-20232A?style=flat-square&logo=react&logoColor=61DAFB)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
-![Tailwind CSS](https://img.shields.io/badge/Tailwind-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat-square&logo=nodedotjs&logoColor=white)
+![Express](https://img.shields.io/badge/Express-000000?style=flat-square&logo=express&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)
+![Vercel](https://img.shields.io/badge/Vercel-000000?style=flat-square&logo=vercel&logoColor=white)
+![Render](https://img.shields.io/badge/Render-46E3B7?style=flat-square&logo=render&logoColor=white)
 
 </div>
 
@@ -17,31 +20,30 @@
 
 ## 📖 Sobre
 
-JVR Imóveis é uma plataforma imobiliária **em produção, atendendo um cliente real**.
-O sistema permite que visitantes encontrem imóveis através de busca filtrável por
-localização, finalidade e características, com uma interface rápida e responsiva.
+Prospera é um SaaS autoral de finanças pessoais que ajuda o usuário a controlar receitas e
+despesas, acompanhar metas e visualizar para onde o dinheiro está indo. O projeto inclui
+integração com o **Mercado Pago via webhooks**, permitindo o processamento automático de
+pagamentos sem intervenção manual.
 
-> 🔒 Repositório privado — o código não é público por se tratar de projeto de cliente.
-> Este README documenta o trabalho realizado. O sistema pode ser visto em produção no
-> link acima.
+> Projeto desenvolvido de ponta a ponta — front-end, API e infraestrutura de deploy.
 
 <!--
-📸 DICA: cole aqui um screenshot da home ou da página de busca de imóveis.
-Como o repositório é privado, o print é o que mostra o resultado do seu trabalho.
+📸 DICA: cole aqui um screenshot ou GIF do dashboard. É o item que mais prende a atenção
+de quem abre o repositório. Ex:
 
-![JVR Imóveis](./docs/home.png)
+![Dashboard](./docs/dashboard.png)
 -->
 
 ---
 
 ## ✨ Funcionalidades
 
-- 🔍 **Busca filtrável** de imóveis por localização, finalidade e características
-- 📱 Interface **responsiva** e otimizada
-- ⚡ Carregamento rápido com Next.js
-- 🏢 Catálogo de imóveis em produção, em uso real
+- 📊 **Dashboards** com visão geral das finanças
+- 🎯 **Metas** financeiras acompanháveis
+- 💳 **Integração com Mercado Pago** via webhooks para processamento automático de pagamentos
+- 📈 Registro e categorização de receitas e despesas
 
-<!-- Ajuste conforme as funcionalidades reais entregues ao cliente. -->
+<!-- Ajuste a lista acima conforme o que o app realmente faz hoje. -->
 
 ---
 
@@ -49,16 +51,70 @@ Como o repositório é privado, o print é o que mostra o resultado do seu traba
 
 | Camada | Tecnologias |
 |--------|-------------|
-| **Front-end** | Next.js, TypeScript, Tailwind CSS |
-| **Back-end** | Node.js |
-| **Status** | ✅ Em produção |
+| **Front-end** (`client`) | React, TypeScript |
+| **Landing page** (`landing`) | Página de apresentação/vendas |
+| **Back-end** (`server`) | Node.js, Express |
+| **Banco de dados** | SQLite (persistent disk no Render) |
+| **Deploy** | Front-end na Vercel · API no Render |
+| **Integrações** | Mercado Pago (webhooks) · Cloudflare |
 
 ---
 
-## 👤 Sobre o projeto
+## 📂 Estrutura do projeto
 
-Projeto entregue de forma autônoma para cliente real, do levantamento de requisitos
-ao deploy em produção.
+```
+financas-pessoais/
+├── client/    # Aplicação React (TypeScript)
+├── landing/   # Landing page
+└── server/    # API Node.js + Express + SQLite
+```
+
+---
+
+## 🚀 Rodando localmente
+
+> **Pré-requisitos:** Node.js instalado.
+
+```bash
+# Clone o repositório
+git clone https://github.com/gedalyas/financas-pessoais.git
+cd financas-pessoais
+```
+
+**1. Back-end (`server`)**
+
+```bash
+cd server
+npm install
+npm run dev     # ajuste para o script real do seu package.json
+```
+
+**2. Front-end (`client`)**
+
+```bash
+cd client
+npm install
+npm run dev
+```
+
+### Variáveis de ambiente
+
+Crie um arquivo `.env` na pasta `server` com as chaves necessárias:
+
+```env
+# Exemplo — ajuste conforme o seu projeto
+PORT=3000
+MERCADO_PAGO_ACCESS_TOKEN=seu_token_aqui
+```
+
+<!--
+⚠️ Liste aqui APENAS as variáveis que o projeto realmente usa, sem nunca commitar
+os valores reais. Confira seu .env atual e ajuste esta seção.
+-->
+
+---
+
+## 📬 Contato
 
 Desenvolvido por **Davi Almeida Souto**
 
